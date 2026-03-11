@@ -36,6 +36,9 @@ Thumbs.db
 tmpclaude-*
 .claude/settings.local.json
 
+# Supervisor logs
+supervisor/logs/
+
 # Python
 **/__pycache__/
 *.pyc

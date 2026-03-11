@@ -19,6 +19,7 @@ import asyncio
 import subprocess
 import logging
 import shutil
+import datetime
 from pathlib import Path
 
 import click
@@ -27,6 +28,7 @@ import structlog
 log = structlog.get_logger()
 
 REPO_ROOT = Path(__file__).parent.parent
+LOGS_DIR = Path(__file__).parent / "logs"
 
 # Resolve the claude executable once at import time.
 # On Windows, npm-installed CLIs are .cmd wrappers that subprocess won't find
@@ -147,7 +149,19 @@ def run_quality_tier(game: str):
 )
 def main(game: str, tier: str):
     """Arcade Swarm supervisor — orchestrates Claude Code agent swarm."""
-    structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
+    LOGS_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    log_file = LOGS_DIR / f"{game}-{tier}-{timestamp}.log"
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.INFO)
+
+    logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, stream_handler])
+    structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
+
+    log.info("supervisor starting", game=game, tier=tier, log_file=str(log_file))
 
     if tier in ("all", "design"):
         run_design_tier(game)
