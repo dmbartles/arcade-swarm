@@ -1,0 +1,20 @@
+{
+  "name": "@arcade-swarm/math-engine",
+  "version": "0.1.0",
+  "description": "Procedural math problem generator aligned to Common Core standards. Zero game-engine dependencies.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["math", "education", "common-core", "arcade-swarm"]
+}

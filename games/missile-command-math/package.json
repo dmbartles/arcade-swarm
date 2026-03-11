@@ -1,0 +1,31 @@
+{
+  "name": "@arcade-swarm/missile-command-math",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Missile Command Math — an educational arcade game for grades 3–5, built with Phaser.js 3.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:e2e": "playwright test",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "phaser": "^3.80.0",
+    "@arcade-swarm/math-engine": "*",
+    "@arcade-swarm/audio": "*",
+    "@arcade-swarm/visual": "*",
+    "@arcade-swarm/analytics": "*"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "vitest": "^2.0.0",
+    "@playwright/test": "^1.44.0",
+    "typescript": "^5.0.0",
+    "eslint": "^9.0.0"
+  }
+}

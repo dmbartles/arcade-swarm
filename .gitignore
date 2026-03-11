@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Build output (scoped to game/lib dist folders, not source directories named "build")
+dist/
+games/*/build/
+shared/*/build/
+
+# Vite
+*.local
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+
+# TypeScript
+*.tsbuildinfo
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code temp files and local settings
+tmpclaude-*
+.claude/settings.local.json
+
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+**/.venv/
+**/venv/
+*.egg-info/
