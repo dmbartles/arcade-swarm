@@ -316,14 +316,18 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
             log_file.write(f"--- Turn {turn} ---\n")
 
             try:
-                response = client.messages.create(
+                # Use streaming to avoid the 10-minute non-streaming timeout
+                # imposed by the SDK for large max_tokens values.
+                # get_final_message() returns the same Message object as create().
+                with client.messages.stream(
                     model=MODEL,
                     max_tokens=MAX_TOKENS,
                     system=system_prompt.strip(),
                     tools=tools,
                     tool_choice={"type": "auto"},
                     messages=messages,
-                )
+                ) as stream:
+                    response = stream.get_final_message()
             except anthropic.APIError as e:
                 log.error("API error", agent=agent["name"], error=str(e))
                 log_file.write(f"API ERROR: {e}\n")
