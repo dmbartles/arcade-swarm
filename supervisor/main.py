@@ -44,8 +44,8 @@ log = structlog.get_logger()
 REPO_ROOT = Path(__file__).parent.parent
 LOGS_DIR = Path(__file__).parent / "logs"
 MODEL = "claude-opus-4-6"
-MAX_TOKENS = 8192
-MAX_TURNS = 50  # per CLAUDE.md: no agent run exceeds 50 turns
+MAX_TOKENS = 32000  # style guides and GDDs can be very large; Opus 4.6 supports up to 128K
+MAX_TURNS = 50      # per CLAUDE.md: no agent run exceeds 50 turns
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -362,11 +362,22 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
                 messages.append({"role": "user", "content": tool_results})
                 continue
 
-            # Unexpected stop reason
-            log_file.write(f"Unexpected stop_reason: {response.stop_reason}\n")
-            break
+            # max_tokens: response was cut off mid-generation
+            if response.stop_reason == "max_tokens":
+                log_file.write(
+                    f"✗ FAILED: stop_reason=max_tokens on turn {turn}. "
+                    f"The response was truncated before completing. "
+                    f"Increase MAX_TOKENS (currently {MAX_TOKENS}).\n"
+                )
+                log.error("agent response truncated", name=agent["name"], turn=turn, max_tokens=MAX_TOKENS)
+                return 1
 
-        log_file.write(f"\n✗ Agent hit {MAX_TURNS}-turn limit.\n")
+            # Unknown stop reason
+            log_file.write(f"✗ FAILED: unexpected stop_reason='{response.stop_reason}' on turn {turn}.\n")
+            log.error("unexpected stop reason", name=agent["name"], stop_reason=response.stop_reason)
+            return 1
+
+        log_file.write(f"\n✗ FAILED: agent reached the {MAX_TURNS}-turn limit without finishing.\n")
         log.warning("agent hit turn limit", name=agent["name"], turns=turn)
         return 1
 
