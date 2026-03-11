@@ -42,27 +42,65 @@ if CLAUDE_BIN is None:
 
 # ---------------------------------------------------------------------------
 # Agent definitions
+# Tool permissions are passed to claude via --allowedTools so agents can only
+# access the tools their role requires.
 # ---------------------------------------------------------------------------
 
 DESIGN_AGENTS = [
-    {"name": "game-design",  "prompt": "agents/design/game-design.md"},
-    {"name": "art-direction","prompt": "agents/design/art-direction.md"},
-    {"name": "curriculum",   "prompt": "agents/design/curriculum.md"},
+    {
+        "name": "game-design",
+        "prompt": "agents/design/game-design.md",
+        "tools": "Read,Write,Edit",
+    },
+    {
+        "name": "art-direction",
+        "prompt": "agents/design/art-direction.md",
+        "tools": "Read,Write,Edit",
+    },
+    {
+        "name": "curriculum",
+        "prompt": "agents/design/curriculum.md",
+        "tools": "Read,Write,Edit",
+    },
 ]
 
 BUILD_AGENTS = [
-    {"name": "coding-1", "prompt": "agents/build/coding-1.md", "worktree": "../agent-1-engine",    "branch": "feature/game-engine"},
-    {"name": "coding-2", "prompt": "agents/build/coding-2.md", "worktree": "../agent-2-gameplay",  "branch": "feature/gameplay-mechanics"},
-    {"name": "coding-3", "prompt": "agents/build/coding-3.md", "worktree": "../agent-3-math",      "branch": "feature/math-engine"},
-    {"name": "devex",    "prompt": "agents/build/devex.md",    "worktree": "../agent-4-devex",      "branch": "feature/build-pipeline"},
+    {
+        "name": "coding-1",
+        "prompt": "agents/build/coding-1.md",
+        "worktree": "../agent-1-engine",
+        "branch": "feature/game-engine",
+        "tools": "Read,Write,Edit,Bash",
+    },
+    {
+        "name": "coding-2",
+        "prompt": "agents/build/coding-2.md",
+        "worktree": "../agent-2-gameplay",
+        "branch": "feature/gameplay-mechanics",
+        "tools": "Read,Write,Edit,Bash",
+    },
+    {
+        "name": "coding-3",
+        "prompt": "agents/build/coding-3.md",
+        "worktree": "../agent-3-math",
+        "branch": "feature/math-engine",
+        "tools": "Read,Write,Edit,Bash",
+    },
+    {
+        "name": "devex",
+        "prompt": "agents/build/devex.md",
+        "worktree": "../agent-4-devex",
+        "branch": "feature/build-pipeline",
+        "tools": "Read,Write,Edit,Bash",
+    },
 ]
 
 QUALITY_AGENTS = [
-    {"name": "architecture", "prompt": "agents/quality/architecture.md"},
-    {"name": "security",     "prompt": "agents/quality/security.md"},
-    {"name": "qa",           "prompt": "agents/quality/qa.md"},
-    {"name": "accessibility","prompt": "agents/quality/accessibility.md"},
-    {"name": "performance",  "prompt": "agents/quality/performance.md"},
+    {"name": "architecture", "prompt": "agents/quality/architecture.md", "tools": "Read,Grep,Glob"},
+    {"name": "security",     "prompt": "agents/quality/security.md",     "tools": "Read,Grep,Glob,Bash"},
+    {"name": "qa",           "prompt": "agents/quality/qa.md",           "tools": "Read,Write,Edit,Bash"},
+    {"name": "accessibility","prompt": "agents/quality/accessibility.md","tools": "Read,Grep,Glob"},
+    {"name": "performance",  "prompt": "agents/quality/performance.md",  "tools": "Read,Grep,Glob"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -72,24 +110,34 @@ QUALITY_AGENTS = [
 TIMEOUT_SECONDS = 600  # 10 minutes per agent run
 
 
-def run_agent(agent: dict, game: str, cwd: Path) -> int:
+def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
     """Spawn a single Claude Code agent as a subprocess. Returns exit code."""
     prompt_path = Path(__file__).parent / agent["prompt"]
     prompt_text = prompt_path.read_text(encoding="utf-8")
     task = f"Game: {game}\n\n{prompt_text}"
 
     log.info("starting agent", name=agent["name"], game=game, cwd=str(cwd))
-    result = subprocess.run(
-        [CLAUDE_BIN, "-p", task],
-        cwd=cwd,
-        timeout=TIMEOUT_SECONDS,
-        check=False,
+
+    with open(agent_log_file, "w", encoding="utf-8") as f:
+        result = subprocess.run(
+            [CLAUDE_BIN, "-p", task, "--allowedTools", agent["tools"]],
+            cwd=cwd,
+            timeout=TIMEOUT_SECONDS,
+            check=False,
+            stdout=f,
+            stderr=subprocess.STDOUT,
+        )
+
+    log.info(
+        "agent finished",
+        name=agent["name"],
+        returncode=result.returncode,
+        output=str(agent_log_file),
     )
-    log.info("agent finished", name=agent["name"], returncode=result.returncode)
     return result.returncode
 
 
-async def run_build_agent_async(agent: dict, game: str) -> int:
+async def run_build_agent_async(agent: dict, game: str, agent_log_file: Path) -> int:
     """Run a build agent in its dedicated git worktree."""
     worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
     if not worktree.exists():
@@ -100,25 +148,28 @@ async def run_build_agent_async(agent: dict, game: str) -> int:
             check=True,
         )
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, run_agent, agent, game, worktree)
+    return await loop.run_in_executor(None, run_agent, agent, game, worktree, agent_log_file)
 
 
 # ---------------------------------------------------------------------------
 # Tier runners
 # ---------------------------------------------------------------------------
 
-def run_design_tier(game: str):
+def run_design_tier(game: str, run_log_dir: Path):
     log.info("=== Design Tier ===")
     for agent in DESIGN_AGENTS:
-        code = run_agent(agent, game, REPO_ROOT)
+        agent_log = run_log_dir / f"{agent['name']}.log"
+        code = run_agent(agent, game, REPO_ROOT, agent_log)
         if code != 0:
-            log.error("design agent failed", name=agent["name"], code=code)
+            log.error("design agent failed", name=agent["name"], code=code, output=str(agent_log))
             raise SystemExit(1)
 
 
-async def run_build_tier_async(game: str):
+async def run_build_tier_async(game: str, run_log_dir: Path):
     log.info("=== Build Tier (parallel) ===")
-    tasks = [run_build_agent_async(agent, game) for agent in BUILD_AGENTS]
+    agent_logs = [run_log_dir / f"{agent['name']}.log" for agent in BUILD_AGENTS]
+    tasks = [run_build_agent_async(agent, game, agent_log)
+             for agent, agent_log in zip(BUILD_AGENTS, agent_logs)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for agent, result in zip(BUILD_AGENTS, results):
         if isinstance(result, Exception) or result != 0:
@@ -126,12 +177,13 @@ async def run_build_tier_async(game: str):
             raise SystemExit(1)
 
 
-def run_quality_tier(game: str):
+def run_quality_tier(game: str, run_log_dir: Path):
     log.info("=== Quality Tier ===")
     for agent in QUALITY_AGENTS:
-        code = run_agent(agent, game, REPO_ROOT)
+        agent_log = run_log_dir / f"{agent['name']}.log"
+        code = run_agent(agent, game, REPO_ROOT, agent_log)
         if code != 0:
-            log.warning("quality agent reported issues", name=agent["name"], code=code)
+            log.warning("quality agent reported issues", name=agent["name"], code=code, output=str(agent_log))
             # Quality failures are warnings, not hard stops — Creative Director decides.
 
 
@@ -151,9 +203,13 @@ def main(game: str, tier: str):
     """Arcade Swarm supervisor — orchestrates Claude Code agent swarm."""
     LOGS_DIR.mkdir(exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    log_file = LOGS_DIR / f"{game}-{tier}-{timestamp}.log"
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    # One subdirectory per run — supervisor log + one log file per agent inside it
+    run_log_dir = LOGS_DIR / f"{game}-{tier}-{timestamp}"
+    run_log_dir.mkdir(exist_ok=True)
+    supervisor_log = run_log_dir / "supervisor.log"
+
+    file_handler = logging.FileHandler(supervisor_log, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     stream_handler = logging.StreamHandler()
     stream_handler.setLevel(logging.INFO)
@@ -161,16 +217,16 @@ def main(game: str, tier: str):
     logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, stream_handler])
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
 
-    log.info("supervisor starting", game=game, tier=tier, log_file=str(log_file))
+    log.info("supervisor starting", game=game, tier=tier, log_dir=str(run_log_dir))
 
     if tier in ("all", "design"):
-        run_design_tier(game)
+        run_design_tier(game, run_log_dir)
 
     if tier in ("all", "build"):
-        asyncio.run(run_build_tier_async(game))
+        asyncio.run(run_build_tier_async(game, run_log_dir))
 
     if tier in ("all", "quality"):
-        run_quality_tier(game)
+        run_quality_tier(game, run_log_dir)
 
     log.info("supervisor complete", game=game, tier=tier)
 
