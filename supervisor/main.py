@@ -18,6 +18,7 @@ Usage:
 import asyncio
 import subprocess
 import logging
+import shutil
 from pathlib import Path
 
 import click
@@ -26,6 +27,16 @@ import structlog
 log = structlog.get_logger()
 
 REPO_ROOT = Path(__file__).parent.parent
+
+# Resolve the claude executable once at import time.
+# On Windows, npm-installed CLIs are .cmd wrappers that subprocess won't find
+# by bare name without shell=True — shutil.which() handles this correctly.
+CLAUDE_BIN = shutil.which("claude")
+if CLAUDE_BIN is None:
+    raise SystemExit(
+        "ERROR: 'claude' executable not found in PATH.\n"
+        "Install Claude Code with: npm install -g @anthropic-ai/claude-code"
+    )
 
 # ---------------------------------------------------------------------------
 # Agent definitions
@@ -67,7 +78,7 @@ def run_agent(agent: dict, game: str, cwd: Path) -> int:
 
     log.info("starting agent", name=agent["name"], game=game, cwd=str(cwd))
     result = subprocess.run(
-        ["claude", "-p", task],
+        [CLAUDE_BIN, "-p", task],
         cwd=cwd,
         timeout=TIMEOUT_SECONDS,
         check=False,
