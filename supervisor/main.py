@@ -7,9 +7,12 @@ Each agent runs a proper tool-use loop: Claude calls Read/Write/Edit/Bash tools
 directly through the API — no claude -p subprocess, no conversational drift.
 
 Agent tiers (in order):
-  1. Design tier  — runs sequentially; each agent depends on the previous output
-  2. Build tier   — runs in parallel; each agent works in its own git worktree
-  3. Quality tier — runs after build tier; reviews the combined output
+  1. Design tier  — sequential; each agent depends on the previous output
+  2. Build tier   — two phases:
+       Phase 1: DevEx runs first (scaffolds build tooling + src/types/ interface stubs)
+       Phase 2: coding-1/2/3 run in parallel on disjoint file sets
+       Phase 3: all build branches merged into master; worktrees cleaned up
+  3. Quality tier — sequential; reviews the combined merged output
 
 Usage:
     python main.py --game missile-command-math
@@ -29,6 +32,7 @@ import glob as glob_module
 import datetime
 import os
 import json
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -44,8 +48,16 @@ log = structlog.get_logger()
 REPO_ROOT = Path(__file__).parent.parent
 LOGS_DIR = Path(__file__).parent / "logs"
 MODEL = "claude-opus-4-6"
-MAX_TOKENS = 32000  # style guides and GDDs can be very large; Opus 4.6 supports up to 128K
-MAX_TURNS = 50      # per CLAUDE.md: no agent run exceeds 50 turns
+MAX_TOKENS = 32000       # style guides and GDDs can be very large; Opus 4.6 supports up to 128K
+MAX_TURNS = 50           # per CLAUDE.md: no agent run exceeds 50 turns
+MAX_RETRIES = 3          # retries on 429 rate-limit errors
+RETRY_DELAYS = [30, 60, 120]  # seconds between retries
+
+
+def _ts() -> str:
+    """Return current local timestamp string for log lines."""
+    return datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -256,12 +268,24 @@ DESIGN_AGENTS = [
     {"name": "curriculum",   "prompt": "agents/design/curriculum.md",    "tools": ["Read", "Write", "Edit"]},
 ]
 
-BUILD_AGENTS = [
-    {"name": "coding-1", "prompt": "agents/build/coding-1.md", "worktree": "../agent-1-engine",   "branch": "feature/game-engine",        "tools": ["Read", "Write", "Edit", "Bash"]},
-    {"name": "coding-2", "prompt": "agents/build/coding-2.md", "worktree": "../agent-2-gameplay", "branch": "feature/gameplay-mechanics",  "tools": ["Read", "Write", "Edit", "Bash"]},
-    {"name": "coding-3", "prompt": "agents/build/coding-3.md", "worktree": "../agent-3-math",     "branch": "feature/math-engine",         "tools": ["Read", "Write", "Edit", "Bash"]},
-    {"name": "devex",    "prompt": "agents/build/devex.md",    "worktree": "../agent-4-devex",     "branch": "feature/build-pipeline",      "tools": ["Read", "Write", "Edit", "Bash"]},
+# DevEx runs first (Phase 1) to scaffold build tooling and src/types/ interface stubs.
+# coding-1/2/3 then run in parallel (Phase 2) on strictly disjoint file sets.
+DEVEX_AGENT = {
+    "name": "devex",
+    "prompt": "agents/build/devex.md",
+    "worktree": "../agent-4-devex",
+    "branch": "feature/build-pipeline",
+    "tools": ["Read", "Write", "Edit", "Bash"],
+}
+
+CODING_AGENTS = [
+    {"name": "coding-1", "prompt": "agents/build/coding-1.md", "worktree": "../agent-1-engine",   "branch": "feature/game-engine",       "tools": ["Read", "Write", "Edit", "Bash"]},
+    {"name": "coding-2", "prompt": "agents/build/coding-2.md", "worktree": "../agent-2-gameplay", "branch": "feature/gameplay-mechanics", "tools": ["Read", "Write", "Edit", "Bash"]},
+    {"name": "coding-3", "prompt": "agents/build/coding-3.md", "worktree": "../agent-3-math",     "branch": "feature/math-engine",        "tools": ["Read", "Write", "Edit", "Bash"]},
 ]
+
+# Ordered for merge step: devex first so its type stubs land before coding branches.
+BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
 
 QUALITY_AGENTS = [
     {"name": "architecture", "prompt": "agents/quality/architecture.md", "tools": ["Read", "Glob", "Grep", "Write"]},
@@ -279,6 +303,10 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
     """
     Run a single agent via the Anthropic SDK tool-use loop.
     Returns 0 on success, 1 on failure.
+
+    Automatically retries up to MAX_RETRIES times on 429 rate-limit errors
+    with exponential back-off (RETRY_DELAYS seconds between attempts).
+    All turns and tool calls are written to agent_log_file with timestamps.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -305,47 +333,72 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
     tools = [ALL_TOOLS[t] for t in agent["tools"] if t in ALL_TOOLS]
     messages = [{"role": "user", "content": user_message}]
 
-    log.info("starting agent", name=agent["name"], game=game, cwd=str(cwd))
+    log.info("agent starting", name=agent["name"], game=game, cwd=str(cwd))
 
     turn = 0
     with open(agent_log_file, "w", encoding="utf-8") as log_file:
-        log_file.write(f"=== Agent: {agent['name']} | Game: {game} ===\n\n")
+
+        def write(line: str):
+            log_file.write(line)
+            log_file.flush()
+
+        write(f"=== Agent: {agent['name']} | Game: {game} | Started: {_ts()} ===\n\n")
 
         while turn < MAX_TURNS:
             turn += 1
-            log_file.write(f"--- Turn {turn} ---\n")
+            write(f"\n--- Turn {turn} | {_ts()} ---\n")
 
-            try:
-                # Use streaming to avoid the 10-minute non-streaming timeout
-                # imposed by the SDK for large max_tokens values.
-                # get_final_message() returns the same Message object as create().
-                with client.messages.stream(
-                    model=MODEL,
-                    max_tokens=MAX_TOKENS,
-                    system=system_prompt.strip(),
-                    tools=tools,
-                    tool_choice={"type": "auto"},
-                    messages=messages,
-                ) as stream:
-                    response = stream.get_final_message()
-            except anthropic.APIError as e:
-                log.error("API error", agent=agent["name"], error=str(e))
-                log_file.write(f"API ERROR: {e}\n")
-                return 1
+            # API call with retry on rate-limit errors
+            retry_count = 0
+            response = None
+            while True:
+                try:
+                    with client.messages.stream(
+                        model=MODEL,
+                        max_tokens=MAX_TOKENS,
+                        system=system_prompt.strip(),
+                        tools=tools,
+                        tool_choice={"type": "auto"},
+                        messages=messages,
+                    ) as stream:
+                        response = stream.get_final_message()
+                    break  # success
+
+                except anthropic.RateLimitError as e:
+                    if retry_count < MAX_RETRIES:
+                        delay = RETRY_DELAYS[retry_count]
+                        write(
+                            f"[{_ts()}] RATE LIMIT — waiting {delay}s before retry "
+                            f"{retry_count + 1}/{MAX_RETRIES}: {e}\n"
+                        )
+                        log.warning("rate limit, retrying", agent=agent["name"], turn=turn, delay=delay)
+                        time.sleep(delay)
+                        retry_count += 1
+                    else:
+                        write(f"[{_ts()}] RATE LIMIT — max retries ({MAX_RETRIES}) exceeded\n")
+                        write(f"[{_ts()}] ✗ FAILED: rate limit exhausted on turn {turn}.\n")
+                        log.error("rate limit max retries exceeded", name=agent["name"], turn=turn)
+                        return 1
+
+                except anthropic.APIError as e:
+                    write(f"[{_ts()}] API ERROR: {e}\n")
+                    write(f"[{_ts()}] ✗ FAILED: API error on turn {turn}.\n")
+                    log.error("API error", agent=agent["name"], error=str(e))
+                    return 1
 
             # Append assistant response to message history
             messages.append({"role": "assistant", "content": response.content})
 
             # Log what Claude did this turn
             for block in response.content:
-                if hasattr(block, "text"):
-                    log_file.write(f"[text] {block.text}\n")
+                if hasattr(block, "text") and block.text:
+                    write(f"[{_ts()}] [text] {block.text}\n")
                 elif block.type == "tool_use":
-                    log_file.write(f"[tool_use] {block.name}({json.dumps(block.input)[:200]})\n")
+                    write(f"[{_ts()}] [tool_use] {block.name}({json.dumps(block.input)[:200]})\n")
 
             # Done — no more tool calls
             if response.stop_reason == "end_turn":
-                log_file.write(f"\n✓ Agent finished in {turn} turn(s).\n")
+                write(f"\n[{_ts()}] ✓ Agent finished in {turn} turn(s).\n")
                 log.info("agent finished", name=agent["name"], turns=turn, returncode=0)
                 return 0
 
@@ -356,7 +409,7 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
                     if block.type != "tool_use":
                         continue
                     result = execute_tool(block.name, block.input, cwd)
-                    log_file.write(f"[tool_result] {block.name} → {result[:300]}\n")
+                    write(f"[{_ts()}] [tool_result] {block.name} → {result[:300]}\n")
                     log.debug("tool executed", tool=block.name, agent=agent["name"])
                     tool_results.append({
                         "type": "tool_result",
@@ -368,76 +421,220 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
 
             # max_tokens: response was cut off mid-generation
             if response.stop_reason == "max_tokens":
-                log_file.write(
-                    f"✗ FAILED: stop_reason=max_tokens on turn {turn}. "
-                    f"The response was truncated before completing. "
-                    f"Increase MAX_TOKENS (currently {MAX_TOKENS}).\n"
+                write(
+                    f"[{_ts()}] ✗ FAILED: stop_reason=max_tokens on turn {turn}. "
+                    f"Response truncated. Increase MAX_TOKENS (currently {MAX_TOKENS}).\n"
                 )
                 log.error("agent response truncated", name=agent["name"], turn=turn, max_tokens=MAX_TOKENS)
                 return 1
 
             # Unknown stop reason
-            log_file.write(f"✗ FAILED: unexpected stop_reason='{response.stop_reason}' on turn {turn}.\n")
+            write(f"[{_ts()}] ✗ FAILED: unexpected stop_reason='{response.stop_reason}' on turn {turn}.\n")
             log.error("unexpected stop reason", name=agent["name"], stop_reason=response.stop_reason)
             return 1
 
-        log_file.write(f"\n✗ FAILED: agent reached the {MAX_TURNS}-turn limit without finishing.\n")
+        write(f"\n[{_ts()}] ✗ FAILED: agent reached the {MAX_TURNS}-turn limit without finishing.\n")
         log.warning("agent hit turn limit", name=agent["name"], turns=turn)
         return 1
 
+
+# ---------------------------------------------------------------------------
+# Worktree management
+# ---------------------------------------------------------------------------
+
+def _ensure_worktree(agent: dict) -> Path:
+    """
+    Create the git worktree for a build agent if it does not already exist.
+    Returns the worktree path.
+    """
+    worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
+    if not worktree.exists():
+        log.info("creating worktree", path=str(worktree), branch=agent["branch"])
+        result = subprocess.run(
+            ["git", "worktree", "add", "-b", agent["branch"], str(worktree), "HEAD"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            if "already exists" in result.stderr:
+                # Branch exists from a prior run — check it out into the worktree.
+                subprocess.run(
+                    ["git", "worktree", "add", str(worktree), agent["branch"]],
+                    cwd=REPO_ROOT,
+                    check=True,
+                )
+            else:
+                raise subprocess.CalledProcessError(
+                    result.returncode, result.args, result.stdout, result.stderr
+                )
+    return worktree
+
+
+def merge_build_branches(run_log_dir: Path) -> bool:
+    """
+    Sequentially merge all build feature branches into HEAD (master).
+    Order: devex first (type stubs), then coding-1/2/3.
+
+    On conflict, stops immediately and prints resolution instructions.
+    On success, removes all build worktrees.
+
+    Returns True on success, False on conflict.
+    """
+    merge_log = run_log_dir / "merge.log"
+
+    with open(merge_log, "w", encoding="utf-8") as f:
+
+        def write(line: str):
+            f.write(line)
+            f.flush()
+
+        write(f"=== Build Branch Merge | {_ts()} ===\n\n")
+
+        for agent in BUILD_AGENTS:
+            branch = agent["branch"]
+            write(f"[{_ts()}] Merging {branch}...\n")
+            log.info("merging branch", branch=branch)
+
+            result = subprocess.run(
+                ["git", "merge", "--no-ff", branch, "-m", f"chore: merge {branch}"],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            if result.stdout:
+                write(result.stdout)
+            if result.stderr:
+                write(f"STDERR: {result.stderr}\n")
+
+            if result.returncode != 0:
+                write(f"\n[{_ts()}] ✗ MERGE CONFLICT in {branch}\n")
+                write("Resolve conflicts manually, then run:\n")
+                write("  git add -A && git merge --continue\n")
+                write("Then re-run the quality tier.\n")
+                log.error(
+                    "merge conflict — manual intervention required",
+                    branch=branch,
+                    merge_log=str(merge_log),
+                )
+                return False
+
+            write(f"[{_ts()}] ✓ Merged {branch}\n\n")
+
+        # Clean up worktrees
+        write(f"[{_ts()}] Cleaning up worktrees...\n")
+        for agent in BUILD_AGENTS:
+            worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
+            if worktree.exists():
+                r = subprocess.run(
+                    ["git", "worktree", "remove", str(worktree), "--force"],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                )
+                status = "ok" if r.returncode == 0 else r.stderr.strip()
+                write(f"[{_ts()}]   Removed {worktree.name}: {status}\n")
+
+        subprocess.run(["git", "worktree", "prune"], cwd=REPO_ROOT, capture_output=True)
+        write(f"\n[{_ts()}] ✓ All branches merged. Worktrees cleaned up.\n")
+        log.info("build merge complete", merge_log=str(merge_log))
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Build agent async wrapper
+# ---------------------------------------------------------------------------
 
 async def run_build_agent_async(
     agent: dict, game: str, run_log_dir: Path, executor: ThreadPoolExecutor
 ) -> int:
     """Run a build agent in its dedicated git worktree."""
-    worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
-    if not worktree.exists():
-        log.info("creating worktree", path=str(worktree), branch=agent["branch"])
-        subprocess.run(
-            ["git", "worktree", "add", str(worktree), agent["branch"]],
-            cwd=REPO_ROOT,
-            check=True,
-        )
+    worktree = _ensure_worktree(agent)
     agent_log = run_log_dir / f"{agent['name']}.log"
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(executor, run_agent, agent, game, worktree, agent_log)
+
 
 # ---------------------------------------------------------------------------
 # Tier runners
 # ---------------------------------------------------------------------------
 
 def run_design_tier(game: str, run_log_dir: Path):
-    log.info("=== Design Tier ===")
+    log.info("=== Design Tier (sequential) ===")
     for agent in DESIGN_AGENTS:
         agent_log = run_log_dir / f"{agent['name']}.log"
+        log.info("running design agent", name=agent["name"])
         code = run_agent(agent, game, REPO_ROOT, agent_log)
         if code != 0:
-            log.error("design agent failed", name=agent["name"], output=str(agent_log))
+            log.error("design agent failed", name=agent["name"], log=str(agent_log))
             raise SystemExit(1)
+        log.info("design agent complete", name=agent["name"])
 
 
 async def run_build_tier_async(game: str, run_log_dir: Path):
-    log.info("=== Build Tier (parallel) ===")
-    with ThreadPoolExecutor(max_workers=len(BUILD_AGENTS)) as executor:
+    loop = asyncio.get_event_loop()
+
+    # -------------------------------------------------------------------------
+    # Phase 1: DevEx — scaffolds build tooling and src/types/ interface stubs.
+    # Coding agents depend on these stubs, so devex must finish first.
+    # -------------------------------------------------------------------------
+    log.info("=== Build Tier — Phase 1: DevEx (tooling + interfaces) ===")
+    devex_worktree = _ensure_worktree(DEVEX_AGENT)
+    devex_log = run_log_dir / f"{DEVEX_AGENT['name']}.log"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        devex_result = await loop.run_in_executor(
+            executor, run_agent, DEVEX_AGENT, game, devex_worktree, devex_log
+        )
+
+    if devex_result != 0:
+        log.error("devex agent failed — cannot proceed to coding phase", log=str(devex_log))
+        raise SystemExit(1)
+    log.info("devex complete")
+
+    # -------------------------------------------------------------------------
+    # Phase 2: coding-1/2/3 — parallel, each owns a disjoint set of files.
+    # Each worktree is created from the current HEAD (does not include devex's
+    # branch yet — coding agents are told to import from src/types/ which will
+    # be merged in during Phase 3).
+    # -------------------------------------------------------------------------
+    log.info("=== Build Tier — Phase 2: Coding Agents (parallel) ===")
+    with ThreadPoolExecutor(max_workers=len(CODING_AGENTS)) as executor:
         tasks = [
             run_build_agent_async(agent, game, run_log_dir, executor)
-            for agent in BUILD_AGENTS
+            for agent in CODING_AGENTS
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-    for agent, result in zip(BUILD_AGENTS, results):
+
+    for agent, result in zip(CODING_AGENTS, results):
         if isinstance(result, Exception) or result != 0:
-            log.error("build agent failed", name=agent["name"], result=result)
+            log.error("coding agent failed", name=agent["name"], result=str(result))
             raise SystemExit(1)
+    log.info("all coding agents complete")
+
+    # -------------------------------------------------------------------------
+    # Phase 3: Merge all build branches into master; clean up worktrees.
+    # Merge order: devex → coding-1 → coding-2 → coding-3
+    # -------------------------------------------------------------------------
+    log.info("=== Build Tier — Phase 3: Merge ===")
+    if not merge_build_branches(run_log_dir):
+        raise SystemExit(1)
+    log.info("build tier complete")
 
 
 def run_quality_tier(game: str, run_log_dir: Path):
-    log.info("=== Quality Tier ===")
+    log.info("=== Quality Tier (sequential) ===")
     for agent in QUALITY_AGENTS:
         agent_log = run_log_dir / f"{agent['name']}.log"
+        log.info("running quality agent", name=agent["name"])
         code = run_agent(agent, game, REPO_ROOT, agent_log)
         if code != 0:
-            log.warning("quality agent reported issues", name=agent["name"], output=str(agent_log))
             # Quality failures are warnings — Creative Director decides whether to block.
+            log.warning("quality agent reported issues", name=agent["name"], log=str(agent_log))
+        else:
+            log.info("quality agent complete", name=agent["name"])
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -459,12 +656,20 @@ def main(game: str, tier: str):
     run_log_dir.mkdir(exist_ok=True)
     supervisor_log = run_log_dir / "supervisor.log"
 
+    # Consistent timestamped logging: DEBUG to file, INFO to console
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)-8s] %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
     file_handler = logging.FileHandler(supervisor_log, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+
     stream_handler = logging.StreamHandler()
     stream_handler.setLevel(logging.INFO)
+    stream_handler.setFormatter(formatter)
 
-    logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, stream_handler])
+    logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, stream_handler], force=True)
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
