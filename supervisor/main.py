@@ -114,13 +114,28 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
     """Spawn a single Claude Code agent as a subprocess. Returns exit code."""
     prompt_path = Path(__file__).parent / agent["prompt"]
     prompt_text = prompt_path.read_text(encoding="utf-8")
-    task = f"Game: {game}\n\n{prompt_text}"
+
+    # Split system context (role/rules) from the imperative task.
+    # Passing everything as -p causes claude to respond conversationally.
+    # --system sets the agent's identity; -p is the direct command to execute.
+    if "## Your Task" in prompt_text:
+        system_prompt, task_section = prompt_text.split("## Your Task", 1)
+    else:
+        system_prompt = prompt_text
+        task_section = "Complete the task described in your system prompt."
+
+    task = (
+        f"Game name: {game}\n\n"
+        f"## Your Task\n{task_section.strip()}\n\n"
+        "IMPORTANT: Do not ask clarifying questions. Do not respond conversationally. "
+        "Use your tools to execute the task immediately and completely."
+    )
 
     log.info("starting agent", name=agent["name"], game=game, cwd=str(cwd))
 
     with open(agent_log_file, "w", encoding="utf-8") as f:
         result = subprocess.run(
-            [CLAUDE_BIN, "-p", task, "--allowedTools", agent["tools"]],
+            [CLAUDE_BIN, "-p", task, "--system", system_prompt, "--allowedTools", agent["tools"]],
             cwd=cwd,
             timeout=TIMEOUT_SECONDS,
             check=False,
