@@ -490,32 +490,65 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
 # Worktree management
 # ---------------------------------------------------------------------------
 
+def _is_valid_worktree(path: Path) -> bool:
+    """Return True only if path is a directory that git recognises as a worktree."""
+    if not path.exists():
+        return False
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def _ensure_worktree(agent: dict) -> Path:
     """
-    Create the git worktree for a build agent if it does not already exist.
-    Returns the worktree path.
+    Create the git worktree for a build agent if it does not already exist
+    OR if the directory exists but is not a valid git worktree (e.g. leftover
+    from a previous failed run).  Returns the worktree path.
     """
     worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
-    if not worktree.exists():
-        log.info("creating worktree", path=str(worktree), branch=agent["branch"])
-        result = subprocess.run(
-            ["git", "worktree", "add", "-b", agent["branch"], str(worktree), "HEAD"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
+
+    if _is_valid_worktree(worktree):
+        log.info("worktree already valid, reusing", path=str(worktree))
+        return worktree
+
+    # Directory exists but is not a valid worktree — remove it so git can recreate it.
+    if worktree.exists():
+        log.warning(
+            "directory exists but is not a valid git worktree — removing and recreating",
+            path=str(worktree),
         )
-        if result.returncode != 0:
-            if "already exists" in result.stderr:
-                # Branch exists from a prior run — check it out into the worktree.
-                subprocess.run(
-                    ["git", "worktree", "add", str(worktree), agent["branch"]],
-                    cwd=REPO_ROOT,
-                    check=True,
-                )
-            else:
-                raise subprocess.CalledProcessError(
-                    result.returncode, result.args, result.stdout, result.stderr
-                )
+        subprocess.run(
+            ["git", "worktree", "remove", str(worktree), "--force"],
+            cwd=REPO_ROOT, capture_output=True,
+        )
+        # If the above fails (not registered), just delete the directory.
+        if worktree.exists():
+            import shutil
+            shutil.rmtree(worktree)
+
+    log.info("creating worktree", path=str(worktree), branch=agent["branch"])
+    result = subprocess.run(
+        ["git", "worktree", "add", "-b", agent["branch"], str(worktree), "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        if "already exists" in result.stderr:
+            # Branch exists from a prior run — check it out into the worktree.
+            subprocess.run(
+                ["git", "worktree", "add", str(worktree), agent["branch"]],
+                cwd=REPO_ROOT,
+                check=True,
+            )
+        else:
+            raise subprocess.CalledProcessError(
+                result.returncode, result.args, result.stdout, result.stderr
+            )
     return worktree
 
 
@@ -620,7 +653,13 @@ def run_design_tier(game: str, run_log_dir: Path):
         log.info("design agent complete", name=agent["name"])
 
 
-async def run_build_tier_async(game: str, run_log_dir: Path):
+async def run_build_tier_async(game: str, run_log_dir: Path, stop_after: str | None = None):
+    """
+    Run the build tier. stop_after controls incremental execution:
+      stop_after="devex"       — run Phase 1 only; inspect src/types/ before continuing
+      stop_after="coordinator" — run Phases 1 + 1.5 only; inspect build plans before coding
+      stop_after=None          — run all phases (default)
+    """
     loop = asyncio.get_event_loop()
 
     # -------------------------------------------------------------------------
@@ -641,6 +680,13 @@ async def run_build_tier_async(game: str, run_log_dir: Path):
         raise SystemExit(1)
     log.info("devex complete")
 
+    if stop_after == "devex":
+        log.info(
+            "Stopped after devex (--stop-after devex). "
+            f"Inspect worktree at {devex_worktree} then re-run with --stop-after coordinator or no flag."
+        )
+        return
+
     # -------------------------------------------------------------------------
     # Phase 1.5: Coordinator — reads all design docs + interface stubs, writes
     # docs/build-plans/<game>-coding-{1,2,3}.md. Runs in the main repo so it
@@ -658,6 +704,13 @@ async def run_build_tier_async(game: str, run_log_dir: Path):
         log.error("coordinator agent failed — cannot proceed to coding phase", log=str(coordinator_log))
         raise SystemExit(1)
     log.info("coordinator complete — build plans written to docs/build-plans/")
+
+    if stop_after == "coordinator":
+        log.info(
+            "Stopped after coordinator (--stop-after coordinator). "
+            "Inspect docs/build-plans/ then re-run without --stop-after to run coding agents."
+        )
+        return
 
     # -------------------------------------------------------------------------
     # Phase 2: coding-1/2/3 — parallel, each owns a disjoint set of files.
@@ -727,7 +780,17 @@ def run_quality_tier(game: str, run_log_dir: Path):
     type=click.Choice(["all", "design", "build", "quality", "smoke"]),
     help="Which tier to run (default: all). Use 'smoke' to verify API + file I/O before a real run.",
 )
-def main(game: str, tier: str):
+@click.option(
+    "--stop-after",
+    default=None,
+    type=click.Choice(["devex", "coordinator"]),
+    help=(
+        "Stop the build tier after the named phase for inspection. "
+        "'devex' stops after Phase 1 (inspect src/types/). "
+        "'coordinator' stops after Phase 1.5 (inspect docs/build-plans/)."
+    ),
+)
+def main(game: str, tier: str, stop_after: str | None):
     """Arcade Swarm supervisor — orchestrates Claude agent swarm via Anthropic SDK."""
     LOGS_DIR.mkdir(exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
@@ -767,7 +830,7 @@ def main(game: str, tier: str):
         run_design_tier(game, run_log_dir)
 
     if tier in ("all", "build"):
-        asyncio.run(run_build_tier_async(game, run_log_dir))
+        asyncio.run(run_build_tier_async(game, run_log_dir, stop_after=stop_after))
 
     if tier in ("all", "quality"):
         run_quality_tier(game, run_log_dir)
