@@ -8,17 +8,41 @@ directly through the API — no claude -p subprocess, no conversational drift.
 
 Agent tiers (in order):
   1. Design tier  — sequential; each agent depends on the previous output
-  2. Build tier   — two phases:
-       Phase 1: DevEx runs first (scaffolds build tooling + src/types/ interface stubs)
-       Phase 2: coding-1/2/3 run in parallel on disjoint file sets
-       Phase 3: all build branches merged into master; worktrees cleaned up
+       game-design   → produces docs/gdds/<game>.md
+       art-direction → produces docs/style-guides/<game>.md
+       curriculum    → produces docs/curriculum-maps/<game>.md
+
+  2. Build tier   — four phases:
+       Phase 1:   DevEx         — scaffolds build tooling (package.json, vite, tsconfig,
+                                  index.html) + writes src/types/ interface stubs.
+                                  Runs in its own worktree (feature/build-pipeline).
+       Phase 1.5: Coordinator   — reads all design docs + src/types/ stubs; writes
+                                  concrete build plans to docs/build-plans/ for each
+                                  coding agent. Runs in the main repo (no worktree).
+       Phase 2:   coding-1/2/3  — run in parallel, each in its own worktree on a
+                                  disjoint set of files. Each reads its build plan from
+                                  docs/build-plans/ before writing any code.
+                                    coding-1 (feature/game-engine)       → scenes, config, main.ts
+                                    coding-2 (feature/gameplay-mechanics) → entities, ScoreManager
+                                    coding-3 (feature/math-engine)       → shared/math-engine,
+                                                                            MathEngine, DifficultyManager
+       Phase 3:   Merge         — merges all build branches into master in dependency
+                                  order (devex → coding-1 → coding-2 → coding-3);
+                                  cleans up worktrees.
+
   3. Quality tier — sequential; reviews the combined merged output
+       architecture  → docs/reviews/architecture.md
+       security      → docs/reviews/security.md
+       qa            → writes/runs tests; docs/reviews/qa.md
+       accessibility → docs/reviews/accessibility.md
+       performance   → docs/reviews/performance.md
 
 Usage:
     python main.py --game missile-command-math
     python main.py --game missile-command-math --tier design
     python main.py --game missile-command-math --tier build
     python main.py --game missile-command-math --tier quality
+    python main.py --game missile-command-math --tier smoke   ← quick API + file I/O check (~2 turns)
 
 Prerequisites:
     1. Copy ../.env.example to ../.env and set ANTHROPIC_API_KEY
@@ -268,8 +292,9 @@ DESIGN_AGENTS = [
     {"name": "curriculum",   "prompt": "agents/design/curriculum.md",    "tools": ["Read", "Write", "Edit"]},
 ]
 
-# DevEx runs first (Phase 1) to scaffold build tooling and src/types/ interface stubs.
-# coding-1/2/3 then run in parallel (Phase 2) on strictly disjoint file sets.
+# Phase 1 — DevEx: scaffolds build tooling (package.json, vite, tsconfig, index.html)
+# and writes src/types/ interface stubs (GameEvents, IMathProblem, IScoreManager,
+# IDifficultyConfig, IMathEngine). Must complete before Coordinator runs.
 DEVEX_AGENT = {
     "name": "devex",
     "prompt": "agents/build/devex.md",
@@ -284,18 +309,31 @@ CODING_AGENTS = [
     {"name": "coding-3", "prompt": "agents/build/coding-3.md", "worktree": "../agent-3-math",     "branch": "feature/math-engine",        "tools": ["Read", "Write", "Edit", "Bash"]},
 ]
 
-# Coordinator runs after devex (Phase 1.5) — reads interface stubs + design docs,
-# writes concrete build plans to docs/build-plans/ for each coding agent.
-# Runs in the main repo (no worktree needed — write-only to docs/).
+# Phase 1.5 — Coordinator: reads all design docs (GDD, style guide, curriculum map)
+# plus the src/types/ stubs written by DevEx, then writes concrete build plans to
+# docs/build-plans/<game>-coding-{1,2,3}.md. Each plan specifies exact files, class
+# signatures, event contracts, config dependencies, and cross-agent assumptions so
+# coding agents can run in parallel without stepping on each other.
+# Runs in the main repo (no worktree) — reads devex output, writes only to docs/.
 COORDINATOR_AGENT = {
     "name": "coordinator",
     "prompt": "agents/build/coordinator.md",
     "tools": ["Read", "Write", "Glob"],
 }
 
-# Ordered for merge step: devex first so its type stubs land before coding branches.
-# Coordinator has no worktree/branch — it writes to docs/ in the main repo.
+# Phase 2 — coding-1/2/3: run in parallel after Coordinator finishes.
+# Each agent reads docs/build-plans/<game>-coding-N.md before writing any code.
+# File ownership is strictly disjoint — no two agents touch the same file.
+
+# Phase 3 — Merge order: devex first (type stubs), then coding-1/2/3 in dependency
+# order. Coordinator is excluded from the merge list (it writes only to docs/).
 BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
+
+SMOKE_AGENT = {
+    "name": "smoke",
+    "prompt": "agents/smoke.md",
+    "tools": ["Read", "Write"],
+}
 
 QUALITY_AGENTS = [
     {"name": "architecture", "prompt": "agents/quality/architecture.md", "tools": ["Read", "Glob", "Grep", "Write"]},
@@ -649,6 +687,21 @@ async def run_build_tier_async(game: str, run_log_dir: Path):
     log.info("build tier complete")
 
 
+def run_smoke_test(game: str, run_log_dir: Path):
+    """
+    Run the smoke test agent: reads CLAUDE.md + brief, writes docs/smoke-test.md,
+    reads it back. Verifies API connectivity + Read/Write tool execution in ~2 turns.
+    Exits 0 on pass, 1 on failure.
+    """
+    log.info("=== Smoke Test ===")
+    smoke_log = run_log_dir / "smoke.log"
+    code = run_agent(SMOKE_AGENT, game, REPO_ROOT, smoke_log)
+    if code != 0:
+        log.error("smoke test FAILED", log=str(smoke_log))
+        raise SystemExit(1)
+    log.info("smoke test PASSED — API connectivity and file I/O are working")
+
+
 def run_quality_tier(game: str, run_log_dir: Path):
     log.info("=== Quality Tier (sequential) ===")
     for agent in QUALITY_AGENTS:
@@ -671,8 +724,8 @@ def run_quality_tier(game: str, run_log_dir: Path):
 @click.option(
     "--tier",
     default="all",
-    type=click.Choice(["all", "design", "build", "quality"]),
-    help="Which tier to run (default: all)",
+    type=click.Choice(["all", "design", "build", "quality", "smoke"]),
+    help="Which tier to run (default: all). Use 'smoke' to verify API + file I/O before a real run.",
 )
 def main(game: str, tier: str):
     """Arcade Swarm supervisor — orchestrates Claude agent swarm via Anthropic SDK."""
@@ -705,6 +758,10 @@ def main(game: str, tier: str):
         )
 
     log.info("supervisor starting", game=game, tier=tier, log_dir=str(run_log_dir))
+
+    if tier == "smoke":
+        run_smoke_test(game, run_log_dir)
+        return
 
     if tier in ("all", "design"):
         run_design_tier(game, run_log_dir)
