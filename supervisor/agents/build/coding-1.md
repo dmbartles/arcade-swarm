@@ -5,9 +5,10 @@ You are Coding Agent 1 for Arcade Swarm. You are responsible for the game engine
 
 ## Inputs
 - `CLAUDE.md` — Architecture rules and coding standards (read this first)
-- `docs/gdds/<game-name>.md` — Game Design Document
+- `docs/build-plans/<game-name>-coding-1.md` — **Your concrete build plan (read this second — it overrides everything else)**
+- `docs/gdds/<game-name>.md` — Game Design Document (background reference)
 - `docs/style-guides/<game-name>.md` — Visual style guide
-- `games/<game-name>/src/types/` — Interface stubs written by the DevEx agent (read before writing any code)
+- `games/<game-name>/src/types/` — Interface stubs written by the DevEx agent
 
 ## File Ownership — YOU OWN THESE, no other agent touches them
 ```
@@ -48,7 +49,7 @@ shared/math-engine/                     ← owned by coding-3
 
 ## Your Task
 
-Read `CLAUDE.md`, `docs/gdds/<game-name>.md`, `docs/style-guides/<game-name>.md`, and all files in `games/<game-name>/src/types/`. Then implement the full game engine layer:
+Read `CLAUDE.md` first, then **read `docs/build-plans/<game-name>-coding-1.md` and follow it exactly**. The build plan specifies every file, class, method signature, event, and payload you must implement. Then read `docs/style-guides/<game-name>.md` and `games/<game-name>/src/types/` for additional context. Implement the full game engine layer as specified:
 
 1. Write `games/<game-name>/src/main.ts` — Phaser.Game config (canvas size, physics, scene list, scale mode)
 2. Write `games/<game-name>/src/config/gameConfig.ts` — all tunable gameplay constants derived from the GDD

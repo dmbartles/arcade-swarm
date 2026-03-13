@@ -284,7 +284,17 @@ CODING_AGENTS = [
     {"name": "coding-3", "prompt": "agents/build/coding-3.md", "worktree": "../agent-3-math",     "branch": "feature/math-engine",        "tools": ["Read", "Write", "Edit", "Bash"]},
 ]
 
+# Coordinator runs after devex (Phase 1.5) — reads interface stubs + design docs,
+# writes concrete build plans to docs/build-plans/ for each coding agent.
+# Runs in the main repo (no worktree needed — write-only to docs/).
+COORDINATOR_AGENT = {
+    "name": "coordinator",
+    "prompt": "agents/build/coordinator.md",
+    "tools": ["Read", "Write", "Glob"],
+}
+
 # Ordered for merge step: devex first so its type stubs land before coding branches.
+# Coordinator has no worktree/branch — it writes to docs/ in the main repo.
 BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
 
 QUALITY_AGENTS = [
@@ -589,15 +599,31 @@ async def run_build_tier_async(game: str, run_log_dir: Path):
         )
 
     if devex_result != 0:
-        log.error("devex agent failed — cannot proceed to coding phase", log=str(devex_log))
+        log.error("devex agent failed — cannot proceed to coordinator", log=str(devex_log))
         raise SystemExit(1)
     log.info("devex complete")
 
     # -------------------------------------------------------------------------
+    # Phase 1.5: Coordinator — reads all design docs + interface stubs, writes
+    # docs/build-plans/<game>-coding-{1,2,3}.md. Runs in the main repo so it
+    # can read src/types/ from devex's worktree output via the repo root.
+    # -------------------------------------------------------------------------
+    log.info("=== Build Tier — Phase 1.5: Coordinator (build plans) ===")
+    coordinator_log = run_log_dir / f"{COORDINATOR_AGENT['name']}.log"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        coordinator_result = await loop.run_in_executor(
+            executor, run_agent, COORDINATOR_AGENT, game, REPO_ROOT, coordinator_log
+        )
+
+    if coordinator_result != 0:
+        log.error("coordinator agent failed — cannot proceed to coding phase", log=str(coordinator_log))
+        raise SystemExit(1)
+    log.info("coordinator complete — build plans written to docs/build-plans/")
+
+    # -------------------------------------------------------------------------
     # Phase 2: coding-1/2/3 — parallel, each owns a disjoint set of files.
-    # Each worktree is created from the current HEAD (does not include devex's
-    # branch yet — coding agents are told to import from src/types/ which will
-    # be merged in during Phase 3).
+    # Each reads docs/build-plans/<game>-coding-{1,2,3}.md before writing code.
     # -------------------------------------------------------------------------
     log.info("=== Build Tier — Phase 2: Coding Agents (parallel) ===")
     with ThreadPoolExecutor(max_workers=len(CODING_AGENTS)) as executor:
