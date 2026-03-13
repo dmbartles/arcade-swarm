@@ -121,3 +121,4 @@ Read `CLAUDE.md` and `docs/gdds/<game-name>.md`. Then:
 3. Ensure `shared/math-engine/`, `shared/audio/`, `shared/visual/`, and `shared/analytics/` each have a valid `package.json` and `tsconfig.json` for the npm workspace.
 4. Run `npm install` from the repo root, then `npm run build` from the game directory. Fix any config errors until the build succeeds (it will produce an empty bundle since no game code exists yet — that is expected).
 5. Commit your changes with message: `chore: scaffold build tooling and type interfaces for <game-name>`
+6. You are running on Windows — use dir and cd /d in Bash, not ls, pwd, or find

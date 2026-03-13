@@ -41,6 +41,10 @@ Usage:
     python main.py --game missile-command-math
     python main.py --game missile-command-math --tier design
     python main.py --game missile-command-math --tier build
+    python main.py --game missile-command-math --tier build --stop-after devex        ← stop after Phase 1; inspect games/missile-command-math/src/types/
+    python main.py --game missile-command-math --tier build --stop-after coordinator  ← stop after Phase 1.5; inspect docs/build-plans/
+    python main.py --game missile-command-math --tier build --clean   ← wipe worktrees + branches before building
+    python main.py --game missile-command-math --tier clean            ← wipe worktrees + branches only (no build)
     python main.py --game missile-command-math --tier quality
     python main.py --game missile-command-math --tier smoke   ← quick API + file I/O check (~2 turns)
 
@@ -76,6 +80,8 @@ MAX_TOKENS = 32000       # style guides and GDDs can be very large; Opus 4.6 sup
 MAX_TURNS = 50           # per CLAUDE.md: no agent run exceeds 50 turns
 MAX_RETRIES = 3          # retries on 429 rate-limit errors
 RETRY_DELAYS = [30, 60, 120]  # seconds between retries
+MAX_TOOL_RESULT_CHARS = 40_000  # truncate tool results in message history to prevent 413 errors
+                                # (node_modules listings, large file reads, etc. can be 100KB+)
 
 
 def _ts() -> str:
@@ -459,6 +465,11 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
                     result = execute_tool(block.name, block.input, cwd)
                     write(f"[{_ts()}] [tool_result] {block.name} → {result[:300]}\n")
                     log.debug("tool executed", tool=block.name, agent=agent["name"])
+                    if len(result) > MAX_TOOL_RESULT_CHARS:
+                        truncated = result[:MAX_TOOL_RESULT_CHARS]
+                        truncated += f"\n... [truncated: {len(result) - MAX_TOOL_RESULT_CHARS} chars omitted — result too large]"
+                        write(f"[{_ts()}] [truncated] {block.name} result was {len(result)} chars, trimmed to {MAX_TOOL_RESULT_CHARS}\n")
+                        result = truncated
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -503,6 +514,39 @@ def _is_valid_worktree(path: Path) -> bool:
     return result.returncode == 0
 
 
+def _force_remove_dir(path: Path) -> None:
+    """
+    Remove a directory tree, working around Windows file-lock errors (WinError 32).
+
+    Strategy:
+      1. Try shutil.rmtree (fast, cross-platform).
+      2. On Windows PermissionError, fall back to `cmd /c rmdir /s /q` which
+         can delete directories that are open in Explorer or VSCode.
+      3. If the directory still exists after both attempts, raise with a clear
+         message telling the user to close it.
+    """
+    import shutil
+    try:
+        shutil.rmtree(path)
+        return
+    except PermissionError:
+        pass  # fall through to Windows fallback
+
+    # Windows-only fallback
+    subprocess.run(
+        ["cmd", "/c", "rmdir", "/s", "/q", str(path)],
+        capture_output=True,
+    )
+    if not path.exists():
+        return
+
+    raise PermissionError(
+        f"Cannot delete {path} — it appears to be open in another process (VSCode, Explorer, etc.).\n"
+        f"Close the folder in VSCode (File → Close Folder or close the '{path.name}' tab) "
+        f"and re-run the command, or run: python main.py --game <game> --tier clean"
+    )
+
+
 def _ensure_worktree(agent: dict) -> Path:
     """
     Create the git worktree for a build agent if it does not already exist
@@ -525,10 +569,9 @@ def _ensure_worktree(agent: dict) -> Path:
             ["git", "worktree", "remove", str(worktree), "--force"],
             cwd=REPO_ROOT, capture_output=True,
         )
-        # If the above fails (not registered), just delete the directory.
+        # If the above fails (not registered), delete the directory directly.
         if worktree.exists():
-            import shutil
-            shutil.rmtree(worktree)
+            _force_remove_dir(worktree)
 
     log.info("creating worktree", path=str(worktree), branch=agent["branch"])
     result = subprocess.run(
@@ -550,6 +593,54 @@ def _ensure_worktree(agent: dict) -> Path:
                 result.returncode, result.args, result.stdout, result.stderr
             )
     return worktree
+
+
+def clean_build_state() -> None:
+    """
+    Remove all build worktree directories and delete their feature branches.
+
+    Safe to run at any time — if a worktree or branch does not exist, the step
+    is skipped silently. Always ends with `git worktree prune` to clean up any
+    stale git metadata.
+
+    Call this before a fresh build run to guarantee a clean slate, or via
+    `--tier clean` to inspect the repo state without running any agents.
+    """
+    log.info("=== Clean Build State ===")
+
+    for agent in BUILD_AGENTS:
+        worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
+        branch = agent["branch"]
+
+        # 1. Remove the worktree (registered or not)
+        if worktree.exists():
+            r = subprocess.run(
+                ["git", "worktree", "remove", str(worktree), "--force"],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                log.info("removed worktree", path=str(worktree))
+            else:
+                # Not registered with git — delete the directory directly.
+                _force_remove_dir(worktree)
+                log.info("force-deleted unregistered directory", path=str(worktree))
+        else:
+            log.info("worktree already absent", path=str(worktree))
+
+        # 2. Delete the feature branch if it exists
+        r = subprocess.run(
+            ["git", "branch", "-D", branch],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            log.info("deleted branch", branch=branch)
+        else:
+            log.info("branch already absent (or on a different branch)", branch=branch)
+
+    # 3. Prune stale worktree metadata
+    subprocess.run(["git", "worktree", "prune"], cwd=REPO_ROOT, capture_output=True)
+    log.info("git worktree prune complete")
+    log.info("=== Clean complete — all build worktrees and branches removed ===")
 
 
 def merge_build_branches(run_log_dir: Path) -> bool:
@@ -777,8 +868,22 @@ def run_quality_tier(game: str, run_log_dir: Path):
 @click.option(
     "--tier",
     default="all",
-    type=click.Choice(["all", "design", "build", "quality", "smoke"]),
-    help="Which tier to run (default: all). Use 'smoke' to verify API + file I/O before a real run.",
+    type=click.Choice(["all", "design", "build", "quality", "smoke", "clean"]),
+    help=(
+        "Which tier to run (default: all). "
+        "'smoke' verifies API + file I/O before a real run. "
+        "'clean' removes all build worktrees and branches without running any agents."
+    ),
+)
+@click.option(
+    "--clean",
+    is_flag=True,
+    default=False,
+    help=(
+        "Wipe all build worktrees and feature branches before running the build tier. "
+        "Use when retrying a failed build run from scratch. "
+        "Has no effect unless --tier is 'build' or 'all'."
+    ),
 )
 @click.option(
     "--stop-after",
@@ -790,7 +895,7 @@ def run_quality_tier(game: str, run_log_dir: Path):
         "'coordinator' stops after Phase 1.5 (inspect docs/build-plans/)."
     ),
 )
-def main(game: str, tier: str, stop_after: str | None):
+def main(game: str, tier: str, stop_after: str | None, clean: bool):
     """Arcade Swarm supervisor — orchestrates Claude agent swarm via Anthropic SDK."""
     LOGS_DIR.mkdir(exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
@@ -826,10 +931,17 @@ def main(game: str, tier: str, stop_after: str | None):
         run_smoke_test(game, run_log_dir)
         return
 
+    if tier == "clean":
+        clean_build_state()
+        return
+
     if tier in ("all", "design"):
         run_design_tier(game, run_log_dir)
 
     if tier in ("all", "build"):
+        if clean:
+            log.info("--clean flag set: wiping build worktrees and branches before building")
+            clean_build_state()
         asyncio.run(run_build_tier_async(game, run_log_dir, stop_after=stop_after))
 
     if tier in ("all", "quality"):
