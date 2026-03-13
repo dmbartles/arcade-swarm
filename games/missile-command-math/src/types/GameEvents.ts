@@ -3,6 +3,8 @@
  *
  * Systems communicate exclusively through these events via the Phaser event bus.
  * No direct cross-system method calls are permitted.
+ *
+ * @see docs/gdds/missile-command-math.md §2 (Game Loop), §5 (Entity List), §6 (Scoring)
  */
 
 export const GameEvents = {
@@ -21,10 +23,12 @@ export const GameEvents = {
   INTERCEPTOR_FIRED: 'interceptor-fired',
   /** Fired when an interceptor reaches its target and explodes. */
   INTERCEPTOR_DETONATED: 'interceptor-detonated',
-  /** Fired when a MIRV splits into child warheads. */
+  /** Fired when a MIRV splits into child warheads at the split altitude. */
   MIRV_SPLIT: 'mirv-split',
   /** Fired when a bomber drops its payload missiles. */
   BOMBER_PAYLOAD_DROPPED: 'bomber-payload-dropped',
+  /** Fired when a paratrooper is caught in an explosion blast radius. */
+  PARATROOPER_CAUGHT: 'paratrooper-caught',
 
   // ── City Events ─────────────────────────────────────────────────────────
   /** Fired when a city takes a hit (missile/paratrooper reaches it). */
@@ -37,7 +41,7 @@ export const GameEvents = {
   // ── Queue Events ────────────────────────────────────────────────────────
   /** Fired when the answer queue advances to the next loaded round. */
   QUEUE_ADVANCED: 'queue-advanced',
-  /** Fired when a wrong-order tap is attempted (no match). */
+  /** Fired when a wrong-order tap is attempted (no match with loaded round). */
   WRONG_TAP: 'wrong-tap',
 
   // ── Score Events ────────────────────────────────────────────────────────
@@ -45,8 +49,12 @@ export const GameEvents = {
   SCORE_UPDATED: 'score-updated',
   /** Fired when a streak milestone is reached (3, 5, or 10). */
   STREAK_MILESTONE: 'streak-milestone',
-  /** Fired when a chain reaction occurs. */
+  /** Fired when a chain reaction occurs (explosion catches nearby threats). */
   CHAIN_REACTION: 'chain-reaction',
+  /** Fired when the live star rating projection changes during a wave. */
+  STAR_RATING_UPDATED: 'star-rating-updated',
+  /** Fired when a perfect wave is achieved (all 6 cities intact). */
+  PERFECT_WAVE: 'perfect-wave',
 
   // ── Difficulty / Level Events ───────────────────────────────────────────
   /** Fired when difficulty configuration changes. */
@@ -58,13 +66,23 @@ export const GameEvents = {
   /** Fired when the wave starts (after interstitial dismissed). */
   WAVE_STARTED: 'wave-started',
 
+  // ── Training Events ─────────────────────────────────────────────────────
+  /** Fired when the training wave is completed successfully. */
+  TRAINING_COMPLETE: 'training-complete',
+
   // ── UI / Scene Events ──────────────────────────────────────────────────
-  /** Fired when the game is paused. */
+  /** Fired when the game is paused via the Pause button. */
   GAME_PAUSED: 'game-paused',
   /** Fired when the game is resumed from pause. */
   GAME_RESUMED: 'game-resumed',
   /** Fired when sound is toggled on/off. */
   SOUND_TOGGLED: 'sound-toggled',
+  /** Fired when an interstitial card is dismissed ("TAP TO LAUNCH →"). */
+  INTERSTITIAL_DISMISSED: 'interstitial-dismissed',
+  /** Fired when the Queue Highlight Assist setting is toggled. */
+  QUEUE_HIGHLIGHT_TOGGLED: 'queue-highlight-toggled',
+  /** Fired when the CRT scanline visual effect is toggled. */
+  CRT_EFFECT_TOGGLED: 'crt-effect-toggled',
 } as const;
 
 /** Union type of all game event string values. */
