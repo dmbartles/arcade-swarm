@@ -6,6 +6,23 @@
 
 export { GameEvents } from './GameEvents';
 export type { GameEvent } from './GameEvents';
+export type {
+  ProblemGeneratedPayload,
+  AnswerValidatedPayload,
+  ThreatType,
+  ThreatSpawnedPayload,
+  ThreatDestroyedPayload,
+  CityHitPayload,
+  CityDestroyedPayload,
+  CitySavedPayload,
+  ChainReactionPayload,
+  StarRatingUpdatedPayload,
+  LevelCompletePayload,
+  GameOverPayload,
+  WaveStartedPayload,
+  MirvSplitPayload,
+  BomberPayloadDroppedPayload,
+} from './GameEvents';
 
 export type { IMathProblem } from './IMathProblem';
 
@@ -13,6 +30,7 @@ export type {
   IScoreManager,
   ScoreUpdatedPayload,
   StreakMilestonePayload,
+  IScoreValues,
 } from './IScoreManager';
 
 export type {

@@ -4,6 +4,8 @@
  *
  * Every math problem displayed on a missile, bomber, or MIRV conforms to this
  * interface. Problems are pre-generated per wave and are always 100% solvable.
+ *
+ * @see docs/gdds/missile-command-math.md §2.2 (Micro Loop), §8 (Curriculum Alignment)
  */
 
 export interface IMathProblem {
@@ -22,7 +24,7 @@ export interface IMathProblem {
    */
   distractors: Array<number | string>;
 
-  /** The CCSS skill type that generated this problem (e.g. "addition", "multiplication", "fractions"). */
+  /** The CCSS skill type that generated this problem (e.g. "addition", "multiplication"). */
   skillType?: string;
 
   /** The grade level this problem targets (2–5). */

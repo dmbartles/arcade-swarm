@@ -87,3 +87,148 @@ export const GameEvents = {
 
 /** Union type of all game event string values. */
 export type GameEvent = typeof GameEvents[keyof typeof GameEvents];
+
+// ── Event Payload Types ─────────────────────────────────────────────────
+// Typed payloads for event bus emissions. Using these ensures all listeners
+// agree on the shape of data carried by each event.
+
+import type { IMathProblem } from './IMathProblem';
+
+/** Payload for PROBLEM_GENERATED — an entire wave's problem set. */
+export interface ProblemGeneratedPayload {
+  /** All problems for this wave, in order. */
+  problems: IMathProblem[];
+  /** Shuffled answer queue (correct answers in playable order). */
+  answerQueue: Array<number | string>;
+}
+
+/** Payload for ANSWER_VALIDATED — result of a player tap. */
+export interface AnswerValidatedPayload {
+  /** The problem that was targeted. */
+  problem: IMathProblem;
+  /** Whether the tap matched the loaded answer round. */
+  correct: boolean;
+  /** The answer the player attempted. */
+  attemptedAnswer: number | string;
+}
+
+/** Threat type discriminator for spawn/destroy events. */
+export type ThreatType =
+  | 'standard-missile'
+  | 'bomber'
+  | 'paratrooper-transport'
+  | 'paratrooper'
+  | 'mirv'
+  | 'mirv-child';
+
+/** Payload for THREAT_SPAWNED. */
+export interface ThreatSpawnedPayload {
+  /** Unique ID for this threat instance. */
+  threatId: string;
+  /** Discriminated threat type. */
+  threatType: ThreatType;
+  /** The math problem attached to this threat (null for paratroopers). */
+  problem: IMathProblem | null;
+  /** Index of the targeted city (0–5), if applicable. */
+  targetCityIndex?: number;
+}
+
+/** Payload for THREAT_DESTROYED. */
+export interface ThreatDestroyedPayload {
+  /** Unique ID of the destroyed threat. */
+  threatId: string;
+  /** Discriminated threat type. */
+  threatType: ThreatType;
+  /** Points awarded for this destruction. */
+  points: number;
+  /** Whether this was destroyed by chain reaction (vs. direct hit). */
+  chainReaction: boolean;
+}
+
+/** Payload for CITY_HIT. */
+export interface CityHitPayload {
+  /** Index of the city that was hit (0–5). */
+  cityIndex: number;
+  /** Remaining hit points for this city after the hit. */
+  remainingHp: number;
+}
+
+/** Payload for CITY_DESTROYED. */
+export interface CityDestroyedPayload {
+  /** Index of the destroyed city (0–5). */
+  cityIndex: number;
+  /** Name of the destroyed city. */
+  cityName: string;
+}
+
+/** Payload for CITY_SAVED. */
+export interface CitySavedPayload {
+  /** Index of the saved city (0–5). */
+  cityIndex: number;
+  /** Name of the saved city. */
+  cityName: string;
+}
+
+/** Payload for CHAIN_REACTION. */
+export interface ChainReactionPayload {
+  /** Number of links in this chain (1 = first chain hit, 2 = second, etc.). */
+  chainLength: number;
+  /** Bonus points from this chain link (+15 per link after first, GDD §6.2). */
+  bonusPoints: number;
+}
+
+/** Payload for STAR_RATING_UPDATED. */
+export interface StarRatingUpdatedPayload {
+  /** Projected star count (1–3). */
+  stars: number;
+}
+
+/** Payload for LEVEL_COMPLETE. */
+export interface LevelCompletePayload {
+  /** The level that was completed (1–10). */
+  level: number;
+  /** Final star rating (1–3). */
+  stars: number;
+  /** Cities surviving at end of wave (0–6). */
+  citiesSurviving: number;
+  /** Final score for this wave. */
+  score: number;
+  /** Accuracy ratio (0–1). */
+  accuracy: number;
+  /** Total chain reactions triggered. */
+  chainReactions: number;
+  /** Whether this was a perfect wave (all 6 cities intact). */
+  perfectWave: boolean;
+}
+
+/** Payload for GAME_OVER. */
+export interface GameOverPayload {
+  /** The level on which the game ended. */
+  level: number;
+  /** Final score at time of game over. */
+  finalScore: number;
+}
+
+/** Payload for WAVE_STARTED. */
+export interface WaveStartedPayload {
+  /** The level number for this wave (1–10). */
+  level: number;
+  /** Total threats in this wave. */
+  totalThreats: number;
+}
+
+/** Payload for MIRV_SPLIT. */
+export interface MirvSplitPayload {
+  /** ID of the parent MIRV that split. */
+  parentThreatId: string;
+  /** IDs of the newly spawned child warheads. */
+  childThreatIds: string[];
+}
+
+/** Payload for BOMBER_PAYLOAD_DROPPED. */
+export interface BomberPayloadDroppedPayload {
+  /** ID of the bomber that dropped payload. */
+  bomberThreatId: string;
+  /** IDs of the dropped missile threats. */
+  droppedMissileIds: string[];
+}

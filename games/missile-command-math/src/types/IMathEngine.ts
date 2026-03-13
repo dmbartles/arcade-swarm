@@ -6,6 +6,8 @@
  *
  * All math problems in the game come from this interface — never from
  * hardcoded strings or static arrays.
+ *
+ * @see docs/gdds/missile-command-math.md §8 (Curriculum Alignment)
  */
 
 import type { IMathProblem } from './IMathProblem';
