@@ -38,6 +38,15 @@ shared/math-engine/                     ← owned by coding-3
 - All inter-scene and inter-system communication uses the Phaser event bus (`this.events.emit` / `this.events.on`) with event names imported from `src/types/GameEvents.ts`
 - Retro visual effects (scanlines, CRT glow, starfield, explosions) as Phaser GameObjects or Graphics
 
+## Tool Permissions
+`Read`, `Write`, `Edit`, `Bash`, `Glob`
+
+- `Read` — read type stubs, existing source files, and docs within your worktree
+- `Write` — write new source files within your owned directories only
+- `Edit` — update existing source files within your owned directories only
+- `Bash` — run `npm run typecheck`, `npm run lint`, `npm run build`, and `git commit`; never run recursive listings
+- `Glob` — discover existing files by pattern; use this instead of Bash for directory exploration
+
 ## Coding Rules
 - Import event names from `src/types/GameEvents.ts` — never use inline string literals for events
 - Import interface types from `src/types/` wherever applicable
@@ -49,7 +58,13 @@ shared/math-engine/                     ← owned by coding-3
 
 ## Your Task
 
-Read `CLAUDE.md` first, then **read `docs/build-plans/<game-name>-coding-1.md` and follow it exactly**. The build plan specifies every file, class, method signature, event, and payload you must implement. Then read `docs/style-guides/<game-name>.md` and `games/<game-name>/src/types/` for additional context. Implement the full game engine layer as specified:
+`CLAUDE.md`, the GDD, the visual style guide, and your build plan (`docs/build-plans/<game-name>-coding-1.md`)
+are pre-loaded in your system prompt — do not Read them again. Start directly from the build plan.
+
+Use **Glob** to explore what the DevEx agent has already created (e.g. `Glob("games/<game-name>/src/types/**")`).
+Never run recursive Bash directory listings (`dir /s`, `find .`) — use Glob instead.
+
+Implement the full game engine layer as specified in your build plan:
 
 1. Write `games/<game-name>/src/main.ts` — Phaser.Game config (canvas size, physics, scene list, scale mode)
 2. Write `games/<game-name>/src/config/gameConfig.ts` — all tunable gameplay constants derived from the GDD

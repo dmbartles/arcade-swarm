@@ -103,6 +103,15 @@ export interface IMathEngine {
 }
 ```
 
+## Tool Permissions
+`Read`, `Write`, `Edit`, `Bash`, `Glob`
+
+- `Read` — read briefs, GDDs, and existing config files
+- `Write` — write build config files and `src/types/` stubs within your worktree
+- `Edit` — update existing config files within your worktree
+- `Bash` — run `npm install`, `npm run build`, and `git commit`; never run recursive listings (`dir /s`, `find .`, `ls -R`)
+- `Glob` — discover existing files by pattern; use this instead of Bash for directory exploration
+
 ## Rules
 - Work in your assigned git worktree only (`../agent-4-devex`).
 - Follow all patterns in CLAUDE.md exactly.
@@ -114,11 +123,14 @@ export interface IMathEngine {
 
 ## Your Task
 
-Read `CLAUDE.md` and `docs/gdds/<game-name>.md`. Then:
+`CLAUDE.md` and `docs/gdds/<game-name>.md` are already pre-loaded in your system prompt — do not Read them again.
+
+To explore the repository, use the **Glob** tool (e.g. `Glob("games/**/*")` or `Glob("shared/*/package.json")`).
+Never run recursive directory listings via Bash (`dir /s`, `find .`, `ls -R`) — they produce millions of lines
+and will be truncated. Use Glob for discovery, Read for specific files.
 
 1. Write or update all build config files listed in your File Ownership section for the game `games/<game-name>/`.
 2. Write the five interface stub files in `games/<game-name>/src/types/` listed above. Tailor `GameEvents` and `IDifficultyConfig` to match the GDD's actual mechanics.
 3. Ensure `shared/math-engine/`, `shared/audio/`, `shared/visual/`, and `shared/analytics/` each have a valid `package.json` and `tsconfig.json` for the npm workspace.
 4. Run `npm install` from the repo root, then `npm run build` from the game directory. Fix any config errors until the build succeeds (it will produce an empty bundle since no game code exists yet — that is expected).
 5. Commit your changes with message: `chore: scaffold build tooling and type interfaces for <game-name>`
-6. You are running on Windows — use dir and cd /d in Bash, not ls, pwd, or find

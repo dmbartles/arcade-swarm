@@ -12,41 +12,53 @@ Agent tiers (in order):
        art-direction → produces docs/style-guides/<game>.md
        curriculum    → produces docs/curriculum-maps/<game>.md
 
-  2. Build tier   — four phases:
+  2. Build tier   — five phases:
        Phase 1:   DevEx         — scaffolds build tooling (package.json, vite, tsconfig,
                                   index.html) + writes src/types/ interface stubs.
                                   Runs in its own worktree (feature/build-pipeline).
+       Phase 1a:  DevEx merge   — merges feature/build-pipeline → master so the Coordinator
+                                  and coding agents can see the type stubs.
        Phase 1.5: Coordinator   — reads all design docs + src/types/ stubs; writes
                                   concrete build plans to docs/build-plans/ for each
                                   coding agent. Runs in the main repo (no worktree).
+       Phase 1b:  Plan commit   — commits build plans to master so coding worktrees
+                                  contain them on creation.
        Phase 2:   coding-1/2/3  — run in parallel, each in its own worktree on a
                                   disjoint set of files. Each reads its build plan from
                                   docs/build-plans/ before writing any code.
-                                    coding-1 (feature/game-engine)       → scenes, config, main.ts
-                                    coding-2 (feature/gameplay-mechanics) → entities, ScoreManager
-                                    coding-3 (feature/math-engine)       → shared/math-engine,
-                                                                            MathEngine, DifficultyManager
-       Phase 3:   Merge         — merges all build branches into master in dependency
-                                  order (devex → coding-1 → coding-2 → coding-3);
-                                  cleans up worktrees.
+                                    coding-1 (feature/game-engine)        → scenes, config, main.ts
+                                    coding-2 (feature/gameplay-mechanics)  → entities, ScoreManager
+                                    coding-3 (feature/math-engine)        → shared/math-engine,
+                                                                             MathEngine, DifficultyManager
+       Phase 3:   Merge         — merges coding-1/2/3 branches into master in dependency
+                                  order (devex was already merged in Phase 1a);
+                                  cleans up all worktrees.
 
-  3. Quality tier — sequential; reviews the combined merged output
+  3. Quality tier — parallel; reviews the combined merged output
        architecture  → docs/reviews/architecture.md
        security      → docs/reviews/security.md
        qa            → writes/runs tests; docs/reviews/qa.md
        accessibility → docs/reviews/accessibility.md
        performance   → docs/reviews/performance.md
 
+Key design choices for token efficiency:
+  - Tiered model selection: Opus only for coding agents; Sonnet for design/quality/coord; Haiku for smoke.
+  - Prompt caching: system prompt (including pre-loaded docs) is sent with cache_control=ephemeral.
+  - Document pre-injection: key reference files (CLAUDE.md, GDD, build plan, style guide) are
+    embedded in the system prompt so agents never burn turns re-reading them via tools.
+  - Message history compression: tool results older than HISTORY_KEEP_FULL_TURNS turns are
+    trimmed to HISTORY_TRIM_TO_CHARS chars, bounding context growth over long agent runs.
+
 Usage:
     python main.py --game missile-command-math
     python main.py --game missile-command-math --tier design
     python main.py --game missile-command-math --tier build
-    python main.py --game missile-command-math --tier build --stop-after devex        ← stop after Phase 1; inspect games/missile-command-math/src/types/
-    python main.py --game missile-command-math --tier build --stop-after coordinator  ← stop after Phase 1.5; inspect docs/build-plans/
-    python main.py --game missile-command-math --tier build --clean   ← wipe worktrees + branches before building
-    python main.py --game missile-command-math --tier clean            ← wipe worktrees + branches only (no build)
+    python main.py --game missile-command-math --tier build --stop-after devex        <- stop after Phase 1; inspect games/missile-command-math/src/types/
+    python main.py --game missile-command-math --tier build --stop-after coordinator  <- stop after Phase 1.5; inspect docs/build-plans/
+    python main.py --game missile-command-math --tier build --clean   <- wipe worktrees + branches before building
+    python main.py --game missile-command-math --tier clean            <- wipe worktrees + branches only (no build)
     python main.py --game missile-command-math --tier quality
-    python main.py --game missile-command-math --tier smoke   ← quick API + file I/O check (~2 turns)
+    python main.py --game missile-command-math --tier smoke   <- quick API + file I/O check (~2 turns)
 
 Prerequisites:
     1. Copy ../.env.example to ../.env and set ANTHROPIC_API_KEY
@@ -60,6 +72,7 @@ import glob as glob_module
 import datetime
 import os
 import json
+import re as _re
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -75,13 +88,36 @@ log = structlog.get_logger()
 
 REPO_ROOT = Path(__file__).parent.parent
 LOGS_DIR = Path(__file__).parent / "logs"
-MODEL = "claude-opus-4-6"
-MAX_TOKENS = 32000       # style guides and GDDs can be very large; Opus 4.6 supports up to 128K
-MAX_TURNS = 50           # per CLAUDE.md: no agent run exceeds 50 turns
-MAX_RETRIES = 3          # retries on 429 rate-limit errors
+
+# ---------------------------------------------------------------------------
+# Tiered model selection
+# ---------------------------------------------------------------------------
+DESIGN_MODEL  = "claude-sonnet-4-6"         # markdown doc generation from creative briefs
+COORD_MODEL   = "claude-sonnet-4-6"         # structured planning from design documents
+BUILD_MODEL   = "claude-opus-4-6"           # complex multi-file code generation
+QUALITY_MODEL = "claude-sonnet-4-6"         # code review and structured reporting
+SMOKE_MODEL   = "claude-haiku-4-5-20251001" # 2-turn API + file I/O connectivity check
+
+# ---------------------------------------------------------------------------
+# Tiered token limits
+# ---------------------------------------------------------------------------
+DESIGN_MAX_TOKENS  = 8_192    # markdown documents from briefs
+COORD_MAX_TOKENS   = 16_384   # three detailed build plan files
+BUILD_MAX_TOKENS   = 32_768   # full game modules (Opus 4.6 supports 128K output)
+QUALITY_MAX_TOKENS = 8_192    # review reports
+SMOKE_MAX_TOKENS   = 4_096    # 2-turn smoke check
+
+MAX_TURNS    = 50             # per CLAUDE.md: no agent run exceeds 50 turns
+MAX_RETRIES  = 3              # retries on 429 rate-limit / 529 overloaded errors
 RETRY_DELAYS = [30, 60, 120]  # seconds between retries
-MAX_TOOL_RESULT_CHARS = 40_000  # truncate tool results in message history to prevent 413 errors
-                                # (node_modules listings, large file reads, etc. can be 100KB+)
+
+# Tool result truncation -- prevents 413 errors from huge file reads or listings
+MAX_TOOL_RESULT_CHARS = 40_000
+
+# Message history compression -- keeps context size bounded over long agent runs.
+# Tool results older than HISTORY_KEEP_FULL_TURNS are compressed to HISTORY_TRIM_TO_CHARS chars.
+HISTORY_KEEP_FULL_TURNS = 12
+HISTORY_TRIM_TO_CHARS   = 500
 
 
 def _ts() -> str:
@@ -167,7 +203,8 @@ GLOB_TOOL = {
     "name": "Glob",
     "description": (
         "Find files matching a glob pattern. Returns a newline-separated list of matching paths. "
-        "Useful for discovering existing files before reading or editing them."
+        "Useful for discovering existing files before reading or editing them. "
+        "Prefer this over Bash directory listings -- it is fast, safe, and cross-platform."
     ),
     "input_schema": {
         "type": "object",
@@ -185,7 +222,8 @@ GREP_TOOL = {
     "name": "Grep",
     "description": (
         "Search for a pattern in files. Returns matching lines with file paths and line numbers. "
-        "Use this to find specific content across the codebase without reading every file."
+        "Use this to find specific content across the codebase without reading every file. "
+        "Skips .git, node_modules, dist, and __pycache__ automatically."
     ),
     "input_schema": {
         "type": "object",
@@ -207,8 +245,9 @@ BASH_TOOL = {
     "name": "Bash",
     "description": (
         "Run a shell command and return its output. "
-        "Use sparingly — only for running tests, linters, build commands, or npm audit. "
-        "Do NOT use for file reads or writes (use Read/Write tools instead)."
+        "Use sparingly -- only for running tests, linters, build commands, or npm audit. "
+        "Do NOT use for file reads or writes (use Read/Write tools instead). "
+        "Do NOT run recursive directory listings (dir /s, find ., ls -R) -- use Glob instead."
     ),
     "input_schema": {
         "type": "object",
@@ -223,17 +262,21 @@ BASH_TOOL = {
 }
 
 ALL_TOOLS = {
-    "Read": READ_TOOL,
+    "Read":  READ_TOOL,
     "Write": WRITE_TOOL,
-    "Edit": EDIT_TOOL,
-    "Glob": GLOB_TOOL,
-    "Grep": GREP_TOOL,
-    "Bash": BASH_TOOL,
+    "Edit":  EDIT_TOOL,
+    "Glob":  GLOB_TOOL,
+    "Grep":  GREP_TOOL,
+    "Bash":  BASH_TOOL,
 }
 
 # ---------------------------------------------------------------------------
 # Tool executor
 # ---------------------------------------------------------------------------
+
+# Directories to skip during Grep searches
+_GREP_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "dist", ".cache", "coverage"}
+
 
 def execute_tool(name: str, inputs: dict, cwd: Path) -> str:
     """Execute a tool call and return the result as a string."""
@@ -265,12 +308,42 @@ def execute_tool(name: str, inputs: dict, cwd: Path) -> str:
             return "\n".join(str(Path(m).relative_to(cwd)) for m in sorted(matches))
 
         elif name == "Grep":
-            search_path = str(cwd / inputs.get("path", "."))
-            result = subprocess.run(
-                ["grep", "-rn", inputs["pattern"], search_path],
-                capture_output=True, text=True, timeout=30
-            )
-            return result.stdout or result.stderr or "(no matches)"
+            # Pure-Python implementation: cross-platform, no external grep binary needed.
+            search_root = (cwd / inputs.get("path", ".")).resolve()
+            raw_pattern = inputs["pattern"]
+            try:
+                regex = _re.compile(raw_pattern)
+            except _re.error:
+                regex = _re.compile(_re.escape(raw_pattern))
+
+            results: list[str] = []
+            MAX_GREP_RESULTS = 500
+
+            def _should_skip(p: Path) -> bool:
+                return any(part in _GREP_SKIP_DIRS for part in p.parts)
+
+            try:
+                for file_path in search_root.rglob("*"):
+                    if _should_skip(file_path) or not file_path.is_file():
+                        continue
+                    try:
+                        text = file_path.read_text(encoding="utf-8", errors="ignore")
+                    except Exception:
+                        continue
+                    for lineno, line in enumerate(text.splitlines(), 1):
+                        if regex.search(line):
+                            try:
+                                rel = file_path.relative_to(cwd)
+                            except ValueError:
+                                rel = file_path
+                            results.append(f"{rel}:{lineno}:{line}")
+                            if len(results) >= MAX_GREP_RESULTS:
+                                results.append(f"... [truncated at {MAX_GREP_RESULTS} matches]")
+                                return "\n".join(results)
+            except Exception as e:
+                return f"ERROR during Grep: {e}"
+
+            return "\n".join(results) if results else "(no matches)"
 
         elif name == "Bash":
             result = subprocess.run(
@@ -288,66 +361,270 @@ def execute_tool(name: str, inputs: dict, cwd: Path) -> str:
     except Exception as e:
         return f"ERROR: {e}"
 
+
+# ---------------------------------------------------------------------------
+# Pre-load helper -- injects reference docs into the agent's system prompt
+# ---------------------------------------------------------------------------
+
+def _load_preload_docs(agent: dict, game: str) -> tuple[str, list[str]]:
+    """
+    Read each path in agent['preload'], substituting {game}, and return
+    (concatenated_content, list_of_resolved_paths).
+
+    Files are always read from REPO_ROOT so preloads are independent of
+    the agent's working directory (worktree vs. main repo).
+    Missing files are noted inline rather than raising.
+    """
+    preloads: list[str] = agent.get("preload", [])
+    parts: list[str] = []
+    resolved: list[str] = []
+
+    for template in preloads:
+        path_str = template.replace("{game}", game)
+        resolved.append(path_str)
+        full_path = REPO_ROOT / path_str
+        try:
+            content = full_path.read_text(encoding="utf-8")
+            parts.append(f"### `{path_str}`\n\n{content}")
+        except FileNotFoundError:
+            parts.append(f"### `{path_str}`\n\n*(file not yet generated -- do not attempt to read it)*")
+
+    combined = "\n\n---\n\n".join(parts) if parts else ""
+    return combined, resolved
+
+
+# ---------------------------------------------------------------------------
+# Message history compression
+# ---------------------------------------------------------------------------
+
+def _trim_message_history(messages: list) -> list:
+    """
+    Compress tool results in old turns to prevent unbounded context growth.
+
+    Keeps the last HISTORY_KEEP_FULL_TURNS tool-result user-messages at full
+    fidelity; compresses earlier ones to HISTORY_TRIM_TO_CHARS chars each.
+    The initial user message (task prompt at index 0) is never modified.
+
+    Only the copy passed to the API is trimmed -- the supervisor's working
+    copy continues to accumulate the full history for accurate turn tracking.
+    """
+    # Identify user messages that contain tool_results (skip index 0 = task)
+    tr_indices = [
+        i for i, m in enumerate(messages)
+        if i > 0
+        and m["role"] == "user"
+        and isinstance(m["content"], list)
+        and any(
+            isinstance(b, dict) and b.get("type") == "tool_result"
+            for b in m["content"]
+        )
+    ]
+
+    if len(tr_indices) <= HISTORY_KEEP_FULL_TURNS:
+        return messages  # nothing to compress yet
+
+    compress_set = set(tr_indices[:-HISTORY_KEEP_FULL_TURNS])
+
+    result = []
+    for i, msg in enumerate(messages):
+        if i in compress_set:
+            new_content = []
+            for block in msg["content"]:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    content = block.get("content", "")
+                    if isinstance(content, str) and len(content) > HISTORY_TRIM_TO_CHARS:
+                        block = {
+                            **block,
+                            "content": (
+                                content[:HISTORY_TRIM_TO_CHARS]
+                                + f"\n... [compressed: {len(content) - HISTORY_TRIM_TO_CHARS} chars omitted]"
+                            ),
+                        }
+                new_content.append(block)
+            result.append({**msg, "content": new_content})
+        else:
+            result.append(msg)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Agent definitions
 # ---------------------------------------------------------------------------
 
 DESIGN_AGENTS = [
-    {"name": "game-design",  "prompt": "agents/design/game-design.md",  "tools": ["Read", "Write", "Edit"]},
-    {"name": "art-direction","prompt": "agents/design/art-direction.md", "tools": ["Read", "Write", "Edit"]},
-    {"name": "curriculum",   "prompt": "agents/design/curriculum.md",    "tools": ["Read", "Write", "Edit"]},
+    {
+        "name": "game-design",
+        "prompt": "agents/design/game-design.md",
+        "tools": ["Read", "Write", "Edit"],
+        "model": DESIGN_MODEL,
+        "max_tokens": DESIGN_MAX_TOKENS,
+        # Brief is the primary input; CLAUDE.md provides project rules.
+        "preload": ["CLAUDE.md", "docs/briefs/{game}.md"],
+    },
+    {
+        "name": "art-direction",
+        "prompt": "agents/design/art-direction.md",
+        "tools": ["Read", "Write", "Edit"],
+        "model": DESIGN_MODEL,
+        "max_tokens": DESIGN_MAX_TOKENS,
+        # GDD exists because game-design ran first (design tier is sequential).
+        "preload": ["CLAUDE.md", "docs/briefs/{game}.md", "docs/gdds/{game}.md"],
+    },
+    {
+        "name": "curriculum",
+        "prompt": "agents/design/curriculum.md",
+        "tools": ["Read", "Write", "Edit"],
+        "model": DESIGN_MODEL,
+        "max_tokens": DESIGN_MAX_TOKENS,
+        "preload": ["CLAUDE.md", "docs/briefs/{game}.md", "docs/gdds/{game}.md"],
+    },
 ]
 
-# Phase 1 — DevEx: scaffolds build tooling (package.json, vite, tsconfig, index.html)
-# and writes src/types/ interface stubs (GameEvents, IMathProblem, IScoreManager,
-# IDifficultyConfig, IMathEngine). Must complete before Coordinator runs.
+# Phase 1 -- DevEx: scaffolds build tooling and src/types/ interface stubs.
 DEVEX_AGENT = {
     "name": "devex",
     "prompt": "agents/build/devex.md",
     "worktree": "../agent-4-devex",
     "branch": "feature/build-pipeline",
-    "tools": ["Read", "Write", "Edit", "Bash"],
+    "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
+    "model": BUILD_MODEL,
+    "max_tokens": BUILD_MAX_TOKENS,
+    "preload": ["CLAUDE.md", "docs/gdds/{game}.md"],
 }
 
-CODING_AGENTS = [
-    {"name": "coding-1", "prompt": "agents/build/coding-1.md", "worktree": "../agent-1-engine",   "branch": "feature/game-engine",       "tools": ["Read", "Write", "Edit", "Bash"]},
-    {"name": "coding-2", "prompt": "agents/build/coding-2.md", "worktree": "../agent-2-gameplay", "branch": "feature/gameplay-mechanics", "tools": ["Read", "Write", "Edit", "Bash"]},
-    {"name": "coding-3", "prompt": "agents/build/coding-3.md", "worktree": "../agent-3-math",     "branch": "feature/math-engine",        "tools": ["Read", "Write", "Edit", "Bash"]},
-]
-
-# Phase 1.5 — Coordinator: reads all design docs (GDD, style guide, curriculum map)
-# plus the src/types/ stubs written by DevEx, then writes concrete build plans to
-# docs/build-plans/<game>-coding-{1,2,3}.md. Each plan specifies exact files, class
-# signatures, event contracts, config dependencies, and cross-agent assumptions so
-# coding agents can run in parallel without stepping on each other.
-# Runs in the main repo (no worktree) — reads devex output, writes only to docs/.
+# Phase 1.5 -- Coordinator: reads all design docs + type stubs, writes build plans.
+# By the time Coordinator runs, feature/build-pipeline has been merged into master
+# so the type stubs are visible in REPO_ROOT/games/{game}/src/types/.
 COORDINATOR_AGENT = {
     "name": "coordinator",
     "prompt": "agents/build/coordinator.md",
     "tools": ["Read", "Write", "Glob"],
+    "model": COORD_MODEL,
+    "max_tokens": COORD_MAX_TOKENS,
+    # All design docs + type stubs pre-loaded; coordinator won't need Read tool for them.
+    "preload": [
+        "CLAUDE.md",
+        "docs/gdds/{game}.md",
+        "docs/style-guides/{game}.md",
+        "docs/curriculum-maps/{game}.md",
+        "games/{game}/src/types/GameEvents.ts",
+        "games/{game}/src/types/IMathProblem.ts",
+        "games/{game}/src/types/IScoreManager.ts",
+        "games/{game}/src/types/IDifficultyConfig.ts",
+        "games/{game}/src/types/IMathEngine.ts",
+    ],
 }
 
-# Phase 2 — coding-1/2/3: run in parallel after Coordinator finishes.
-# Each agent reads docs/build-plans/<game>-coding-N.md before writing any code.
-# File ownership is strictly disjoint — no two agents touch the same file.
-
-# Phase 3 — Merge order: devex first (type stubs), then coding-1/2/3 in dependency
-# order. Coordinator is excluded from the merge list (it writes only to docs/).
-BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
+# Phase 2 -- coding-1/2/3: parallel, each owns a disjoint set of files.
+# By the time these run, master contains: type stubs (from Phase 1a merge) +
+# build plans (from Phase 1b commit) -- so both are visible in every worktree.
+CODING_AGENTS = [
+    {
+        "name": "coding-1",
+        "prompt": "agents/build/coding-1.md",
+        "worktree": "../agent-1-engine",
+        "branch": "feature/game-engine",
+        "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
+        "model": BUILD_MODEL,
+        "max_tokens": BUILD_MAX_TOKENS,
+        "preload": [
+            "CLAUDE.md",
+            "docs/gdds/{game}.md",
+            "docs/style-guides/{game}.md",
+            "docs/build-plans/{game}-coding-1.md",
+        ],
+    },
+    {
+        "name": "coding-2",
+        "prompt": "agents/build/coding-2.md",
+        "worktree": "../agent-2-gameplay",
+        "branch": "feature/gameplay-mechanics",
+        "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
+        "model": BUILD_MODEL,
+        "max_tokens": BUILD_MAX_TOKENS,
+        "preload": [
+            "CLAUDE.md",
+            "docs/gdds/{game}.md",
+            "docs/style-guides/{game}.md",
+            "docs/build-plans/{game}-coding-2.md",
+        ],
+    },
+    {
+        "name": "coding-3",
+        "prompt": "agents/build/coding-3.md",
+        "worktree": "../agent-3-math",
+        "branch": "feature/math-engine",
+        "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
+        "model": BUILD_MODEL,
+        "max_tokens": BUILD_MAX_TOKENS,
+        "preload": [
+            "CLAUDE.md",
+            "docs/gdds/{game}.md",
+            "docs/style-guides/{game}.md",
+            "docs/curriculum-maps/{game}.md",
+            "docs/build-plans/{game}-coding-3.md",
+        ],
+    },
+]
 
 SMOKE_AGENT = {
     "name": "smoke",
     "prompt": "agents/smoke.md",
     "tools": ["Read", "Write"],
+    "model": SMOKE_MODEL,
+    "max_tokens": SMOKE_MAX_TOKENS,
+    "preload": ["CLAUDE.md"],
 }
 
 QUALITY_AGENTS = [
-    {"name": "architecture", "prompt": "agents/quality/architecture.md", "tools": ["Read", "Glob", "Grep", "Write"]},
-    {"name": "security",     "prompt": "agents/quality/security.md",     "tools": ["Read", "Glob", "Grep", "Bash", "Write"]},
-    {"name": "qa",           "prompt": "agents/quality/qa.md",           "tools": ["Read", "Write", "Edit", "Bash"]},
-    {"name": "accessibility","prompt": "agents/quality/accessibility.md","tools": ["Read", "Glob", "Grep", "Write"]},
-    {"name": "performance",  "prompt": "agents/quality/performance.md",  "tools": ["Read", "Glob", "Grep", "Write"]},
+    {
+        "name": "architecture",
+        "prompt": "agents/quality/architecture.md",
+        "tools": ["Read", "Glob", "Grep", "Write"],
+        "model": QUALITY_MODEL,
+        "max_tokens": QUALITY_MAX_TOKENS,
+        "preload": ["CLAUDE.md"],
+    },
+    {
+        "name": "security",
+        "prompt": "agents/quality/security.md",
+        "tools": ["Read", "Glob", "Grep", "Bash", "Write"],
+        "model": QUALITY_MODEL,
+        "max_tokens": QUALITY_MAX_TOKENS,
+        "preload": ["CLAUDE.md"],
+    },
+    {
+        "name": "qa",
+        "prompt": "agents/quality/qa.md",
+        "tools": ["Read", "Write", "Edit", "Bash"],
+        "model": QUALITY_MODEL,
+        "max_tokens": QUALITY_MAX_TOKENS,
+        "preload": ["CLAUDE.md"],
+    },
+    {
+        "name": "accessibility",
+        "prompt": "agents/quality/accessibility.md",
+        "tools": ["Read", "Glob", "Grep", "Write"],
+        "model": QUALITY_MODEL,
+        "max_tokens": QUALITY_MAX_TOKENS,
+        "preload": ["CLAUDE.md"],
+    },
+    {
+        "name": "performance",
+        "prompt": "agents/quality/performance.md",
+        "tools": ["Read", "Glob", "Grep", "Bash", "Write"],
+        "model": QUALITY_MODEL,
+        "max_tokens": QUALITY_MAX_TOKENS,
+        "preload": ["CLAUDE.md"],
+    },
 ]
+
+# All agents that use worktrees (used by clean / worktree management)
+BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
+
+# Phase 3 merges only the coding branches -- DevEx is already merged after Phase 1a.
+_PHASE3_MERGE_AGENTS = CODING_AGENTS
+
 
 # ---------------------------------------------------------------------------
 # Agent runner
@@ -358,18 +635,31 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
     Run a single agent via the Anthropic SDK tool-use loop.
     Returns 0 on success, 1 on failure.
 
-    Automatically retries up to MAX_RETRIES times on 429 rate-limit errors
-    with exponential back-off (RETRY_DELAYS seconds between attempts).
-    All turns and tool calls are written to agent_log_file with timestamps.
+    Token efficiency features:
+    - Agent-specific model and max_tokens (tiered per role).
+    - System prompt sent with cache_control=ephemeral for prompt caching.
+    - Key reference documents pre-injected into the system prompt so agents
+      do not burn tool-use turns reading them, and they never accumulate
+      in the growing message history.
+    - Message history is compressed before each API call to keep context bounded.
+
+    Automatically retries up to MAX_RETRIES times on 429/529 errors with
+    exponential back-off. All turns and tool calls are written to agent_log_file.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        log.error("ANTHROPIC_API_KEY not set — copy .env.example to .env and add your key")
+        log.error("ANTHROPIC_API_KEY not set")
         return 1
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    # Load agent prompt and split into system + task
+    model      = agent.get("model",      BUILD_MODEL)
+    max_tokens = agent.get("max_tokens", BUILD_MAX_TOKENS)
+
+    # Load pre-injected reference documents (always read from REPO_ROOT)
+    preloaded_content, preloaded_paths = _load_preload_docs(agent, game)
+
+    # Split agent prompt into system + task sections
     prompt_path = Path(__file__).parent / agent["prompt"]
     prompt_text = prompt_path.read_text(encoding="utf-8")
 
@@ -379,15 +669,46 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
         system_prompt = prompt_text
         task_section = "Complete the task described in your system prompt."
 
+    # Build combined system prompt (role rules + pre-loaded docs).
+    # This entire block is sent with cache_control=ephemeral so it is cached
+    # across turns -- the dominant source of repeated input tokens.
+    combined_system = system_prompt.strip()
+    if preloaded_content:
+        combined_system += (
+            "\n\n---\n\n## Pre-loaded Reference Documents\n\n"
+            "The following documents are included for your reference. "
+            "**Do NOT use the Read tool to re-read any of them** -- they are already in context.\n\n"
+            + preloaded_content
+        )
+
+    # System as a list enables prompt caching on the Anthropic API.
+    system_blocks = [
+        {
+            "type": "text",
+            "text": combined_system,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    # First user message lists pre-loaded paths so the agent knows what to skip.
+    preload_notice = ""
+    if preloaded_paths:
+        preload_notice = (
+            "**Already in your system prompt (do not Read again):** "
+            + ", ".join(f"`{p}`" for p in preloaded_paths)
+            + "\n\n"
+        )
+
     user_message = (
         f"Game name: {game}\n\n"
-        f"## Your Task\n{task_section.strip()}"
+        + preload_notice
+        + f"## Your Task\n{task_section.strip()}"
     )
 
-    tools = [ALL_TOOLS[t] for t in agent["tools"] if t in ALL_TOOLS]
+    tools    = [ALL_TOOLS[t] for t in agent["tools"] if t in ALL_TOOLS]
     messages = [{"role": "user", "content": user_message}]
 
-    log.info("agent starting", name=agent["name"], game=game, cwd=str(cwd))
+    log.info("agent starting", name=agent["name"], game=game, model=model, cwd=str(cwd))
 
     turn = 0
     with open(agent_log_file, "w", encoding="utf-8") as log_file:
@@ -396,51 +717,61 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
             log_file.write(line)
             log_file.flush()
 
-        write(f"=== Agent: {agent['name']} | Game: {game} | Started: {_ts()} ===\n\n")
+        write(
+            f"=== Agent: {agent['name']} | Game: {game} | Model: {model} | "
+            f"MaxTokens: {max_tokens} | Started: {_ts()} ===\n\n"
+        )
+        if preloaded_paths:
+            write(f"Pre-loaded: {', '.join(preloaded_paths)}\n\n")
 
         while turn < MAX_TURNS:
             turn += 1
             write(f"\n--- Turn {turn} | {_ts()} ---\n")
 
-            # API call with retry on rate-limit errors
+            # Compress old tool results before sending to keep context bounded.
+            # The full messages list is preserved for accurate turn tracking.
+            api_messages = _trim_message_history(messages)
+
+            # API call with retry on rate-limit / overloaded errors
             retry_count = 0
             response = None
             while True:
                 try:
                     with client.messages.stream(
-                        model=MODEL,
-                        max_tokens=MAX_TOKENS,
-                        system=system_prompt.strip(),
+                        model=model,
+                        max_tokens=max_tokens,
+                        system=system_blocks,
                         tools=tools,
                         tool_choice={"type": "auto"},
-                        messages=messages,
+                        messages=api_messages,
                     ) as stream:
                         response = stream.get_final_message()
                     break  # success
 
-                except anthropic.RateLimitError as e:
+                except (anthropic.RateLimitError, anthropic.InternalServerError) as e:
+                    error_kind = "RATE LIMIT" if isinstance(e, anthropic.RateLimitError) else "OVERLOADED"
                     if retry_count < MAX_RETRIES:
                         delay = RETRY_DELAYS[retry_count]
                         write(
-                            f"[{_ts()}] RATE LIMIT — waiting {delay}s before retry "
+                            f"[{_ts()}] {error_kind} -- waiting {delay}s before retry "
                             f"{retry_count + 1}/{MAX_RETRIES}: {e}\n"
                         )
-                        log.warning("rate limit, retrying", agent=agent["name"], turn=turn, delay=delay)
+                        log.warning(f"{error_kind.lower()}, retrying", agent=agent["name"], turn=turn, delay=delay)
                         time.sleep(delay)
                         retry_count += 1
                     else:
-                        write(f"[{_ts()}] RATE LIMIT — max retries ({MAX_RETRIES}) exceeded\n")
-                        write(f"[{_ts()}] ✗ FAILED: rate limit exhausted on turn {turn}.\n")
-                        log.error("rate limit max retries exceeded", name=agent["name"], turn=turn)
+                        write(f"[{_ts()}] {error_kind} -- max retries ({MAX_RETRIES}) exceeded\n")
+                        write(f"[{_ts()}] X FAILED: {error_kind.lower()} exhausted on turn {turn}.\n")
+                        log.error(f"{error_kind.lower()} max retries exceeded", name=agent["name"], turn=turn)
                         return 1
 
                 except anthropic.APIError as e:
                     write(f"[{_ts()}] API ERROR: {e}\n")
-                    write(f"[{_ts()}] ✗ FAILED: API error on turn {turn}.\n")
+                    write(f"[{_ts()}] X FAILED: API error on turn {turn}.\n")
                     log.error("API error", agent=agent["name"], error=str(e))
                     return 1
 
-            # Append assistant response to message history
+            # Append assistant response to the full (uncompressed) message history
             messages.append({"role": "assistant", "content": response.content})
 
             # Log what Claude did this turn
@@ -450,9 +781,9 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
                 elif block.type == "tool_use":
                     write(f"[{_ts()}] [tool_use] {block.name}({json.dumps(block.input)[:200]})\n")
 
-            # Done — no more tool calls
+            # Done -- no more tool calls
             if response.stop_reason == "end_turn":
-                write(f"\n[{_ts()}] ✓ Agent finished in {turn} turn(s).\n")
+                write(f"\n[{_ts()}] + Agent finished in {turn} turn(s).\n")
                 log.info("agent finished", name=agent["name"], turns=turn, returncode=0)
                 return 0
 
@@ -463,12 +794,18 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
                     if block.type != "tool_use":
                         continue
                     result = execute_tool(block.name, block.input, cwd)
-                    write(f"[{_ts()}] [tool_result] {block.name} → {result[:300]}\n")
+                    write(f"[{_ts()}] [tool_result] {block.name} -> {result[:300]}\n")
                     log.debug("tool executed", tool=block.name, agent=agent["name"])
                     if len(result) > MAX_TOOL_RESULT_CHARS:
                         truncated = result[:MAX_TOOL_RESULT_CHARS]
-                        truncated += f"\n... [truncated: {len(result) - MAX_TOOL_RESULT_CHARS} chars omitted — result too large]"
-                        write(f"[{_ts()}] [truncated] {block.name} result was {len(result)} chars, trimmed to {MAX_TOOL_RESULT_CHARS}\n")
+                        truncated += (
+                            f"\n... [truncated: {len(result) - MAX_TOOL_RESULT_CHARS} chars omitted"
+                            " -- result too large; use a more targeted query]"
+                        )
+                        write(
+                            f"[{_ts()}] [truncated] {block.name} result was {len(result)} chars, "
+                            f"trimmed to {MAX_TOOL_RESULT_CHARS}\n"
+                        )
                         result = truncated
                     tool_results.append({
                         "type": "tool_result",
@@ -481,18 +818,19 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
             # max_tokens: response was cut off mid-generation
             if response.stop_reason == "max_tokens":
                 write(
-                    f"[{_ts()}] ✗ FAILED: stop_reason=max_tokens on turn {turn}. "
-                    f"Response truncated. Increase MAX_TOKENS (currently {MAX_TOKENS}).\n"
+                    f"[{_ts()}] X FAILED: stop_reason=max_tokens on turn {turn}. "
+                    f"Response truncated. Increase the max_tokens for this agent tier "
+                    f"(currently {max_tokens}).\n"
                 )
-                log.error("agent response truncated", name=agent["name"], turn=turn, max_tokens=MAX_TOKENS)
+                log.error("agent response truncated", name=agent["name"], turn=turn, max_tokens=max_tokens)
                 return 1
 
             # Unknown stop reason
-            write(f"[{_ts()}] ✗ FAILED: unexpected stop_reason='{response.stop_reason}' on turn {turn}.\n")
+            write(f"[{_ts()}] X FAILED: unexpected stop_reason='{response.stop_reason}' on turn {turn}.\n")
             log.error("unexpected stop reason", name=agent["name"], stop_reason=response.stop_reason)
             return 1
 
-        write(f"\n[{_ts()}] ✗ FAILED: agent reached the {MAX_TURNS}-turn limit without finishing.\n")
+        write(f"\n[{_ts()}] X FAILED: agent reached the {MAX_TURNS}-turn limit without finishing.\n")
         log.warning("agent hit turn limit", name=agent["name"], turns=turn)
         return 1
 
@@ -520,10 +858,8 @@ def _force_remove_dir(path: Path) -> None:
 
     Strategy:
       1. Try shutil.rmtree (fast, cross-platform).
-      2. On Windows PermissionError, fall back to `cmd /c rmdir /s /q` which
-         can delete directories that are open in Explorer or VSCode.
-      3. If the directory still exists after both attempts, raise with a clear
-         message telling the user to close it.
+      2. On Windows PermissionError, fall back to `cmd /c rmdir /s /q`.
+      3. If the directory still exists after both attempts, raise with a clear message.
     """
     import shutil
     try:
@@ -532,7 +868,6 @@ def _force_remove_dir(path: Path) -> None:
     except PermissionError:
         pass  # fall through to Windows fallback
 
-    # Windows-only fallback
     subprocess.run(
         ["cmd", "/c", "rmdir", "/s", "/q", str(path)],
         capture_output=True,
@@ -541,8 +876,8 @@ def _force_remove_dir(path: Path) -> None:
         return
 
     raise PermissionError(
-        f"Cannot delete {path} — it appears to be open in another process (VSCode, Explorer, etc.).\n"
-        f"Close the folder in VSCode (File → Close Folder or close the '{path.name}' tab) "
+        f"Cannot delete {path} -- it appears to be open in another process (VSCode, Explorer, etc.).\n"
+        f"Close the folder in VSCode (File -> Close Folder or close the '{path.name}' tab) "
         f"and re-run the command, or run: python main.py --game <game> --tier clean"
     )
 
@@ -550,8 +885,8 @@ def _force_remove_dir(path: Path) -> None:
 def _ensure_worktree(agent: dict) -> Path:
     """
     Create the git worktree for a build agent if it does not already exist
-    OR if the directory exists but is not a valid git worktree (e.g. leftover
-    from a previous failed run).  Returns the worktree path.
+    OR if the directory exists but is not a valid git worktree.
+    Returns the worktree path.
     """
     worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
 
@@ -559,17 +894,15 @@ def _ensure_worktree(agent: dict) -> Path:
         log.info("worktree already valid, reusing", path=str(worktree))
         return worktree
 
-    # Directory exists but is not a valid worktree — remove it so git can recreate it.
     if worktree.exists():
         log.warning(
-            "directory exists but is not a valid git worktree — removing and recreating",
+            "directory exists but is not a valid git worktree -- removing and recreating",
             path=str(worktree),
         )
         subprocess.run(
             ["git", "worktree", "remove", str(worktree), "--force"],
             cwd=REPO_ROOT, capture_output=True,
         )
-        # If the above fails (not registered), delete the directory directly.
         if worktree.exists():
             _force_remove_dir(worktree)
 
@@ -582,7 +915,6 @@ def _ensure_worktree(agent: dict) -> Path:
     )
     if result.returncode != 0:
         if "already exists" in result.stderr:
-            # Branch exists from a prior run — check it out into the worktree.
             subprocess.run(
                 ["git", "worktree", "add", str(worktree), agent["branch"]],
                 cwd=REPO_ROOT,
@@ -599,12 +931,9 @@ def clean_build_state() -> None:
     """
     Remove all build worktree directories and delete their feature branches.
 
-    Safe to run at any time — if a worktree or branch does not exist, the step
+    Safe to run at any time -- if a worktree or branch does not exist, the step
     is skipped silently. Always ends with `git worktree prune` to clean up any
     stale git metadata.
-
-    Call this before a fresh build run to guarantee a clean slate, or via
-    `--tier clean` to inspect the repo state without running any agents.
     """
     log.info("=== Clean Build State ===")
 
@@ -612,7 +941,6 @@ def clean_build_state() -> None:
         worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
         branch = agent["branch"]
 
-        # 1. Remove the worktree (registered or not)
         if worktree.exists():
             r = subprocess.run(
                 ["git", "worktree", "remove", str(worktree), "--force"],
@@ -621,13 +949,11 @@ def clean_build_state() -> None:
             if r.returncode == 0:
                 log.info("removed worktree", path=str(worktree))
             else:
-                # Not registered with git — delete the directory directly.
                 _force_remove_dir(worktree)
                 log.info("force-deleted unregistered directory", path=str(worktree))
         else:
             log.info("worktree already absent", path=str(worktree))
 
-        # 2. Delete the feature branch if it exists
         r = subprocess.run(
             ["git", "branch", "-D", branch],
             cwd=REPO_ROOT, capture_output=True, text=True,
@@ -635,22 +961,133 @@ def clean_build_state() -> None:
         if r.returncode == 0:
             log.info("deleted branch", branch=branch)
         else:
-            log.info("branch already absent (or on a different branch)", branch=branch)
+            log.info("branch already absent", branch=branch)
 
-    # 3. Prune stale worktree metadata
     subprocess.run(["git", "worktree", "prune"], cwd=REPO_ROOT, capture_output=True)
     log.info("git worktree prune complete")
-    log.info("=== Clean complete — all build worktrees and branches removed ===")
+    log.info("=== Clean complete -- all build worktrees and branches removed ===")
+
+
+# ---------------------------------------------------------------------------
+# Inter-phase git operations
+# ---------------------------------------------------------------------------
+
+def merge_devex_branch(run_log_dir: Path) -> bool:
+    """
+    Phase 1a: merge feature/build-pipeline into master after DevEx completes.
+
+    This makes the type stubs (src/types/) written by DevEx visible in REPO_ROOT
+    so the Coordinator can read them, and so coding worktrees (which branch from
+    HEAD at creation time) will contain them.
+    """
+    branch = DEVEX_AGENT["branch"]
+    merge_log = run_log_dir / "merge-devex.log"
+    log.info("merging devex branch into master", branch=branch)
+
+    with open(merge_log, "w", encoding="utf-8") as f:
+        f.write(f"=== Phase 1a: Merge {branch} -> master | {_ts()} ===\n\n")
+
+        result = subprocess.run(
+            ["git", "merge", "--no-ff", branch, "-m",
+             f"chore: merge {branch} (build tooling + type stubs)"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout:
+            f.write(result.stdout)
+        if result.stderr:
+            f.write(f"STDERR: {result.stderr}\n")
+
+        if result.returncode != 0:
+            # "Already up to date" means DevEx made no new commits -- not a failure.
+            if "already up to date" in (result.stdout + result.stderr).lower():
+                f.write(f"[{_ts()}] Already up to date -- nothing new to merge\n")
+                log.info("devex branch already up to date", branch=branch)
+                return True
+            f.write(f"[{_ts()}] X MERGE FAILED for {branch}\n")
+            log.error("devex merge failed", branch=branch, merge_log=str(merge_log))
+            return False
+
+        f.write(f"[{_ts()}] + Merged {branch} into master\n")
+        log.info("devex branch merged into master", branch=branch)
+        return True
+
+
+def commit_build_plans(game: str, run_log_dir: Path) -> bool:
+    """
+    Phase 1b: commit the Coordinator's build plans to master.
+
+    Build plans are written by the Coordinator as untracked files in REPO_ROOT.
+    Committing them to master ensures every coding worktree (branched from HEAD)
+    will contain them at creation time -- no Read-tool round-trip needed.
+    """
+    commit_log = run_log_dir / "commit-build-plans.log"
+    log.info("committing coordinator build plans to master", game=game)
+
+    plan_files = [
+        f"docs/build-plans/{game}-coding-1.md",
+        f"docs/build-plans/{game}-coding-2.md",
+        f"docs/build-plans/{game}-coding-3.md",
+    ]
+
+    with open(commit_log, "w", encoding="utf-8") as f:
+        f.write(f"=== Phase 1b: Commit build plans | {_ts()} ===\n\n")
+
+        stage = subprocess.run(
+            ["git", "add", "--"] + plan_files,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        f.write(f"git add: {stage.stdout or '(ok)'}\n")
+        if stage.stderr:
+            f.write(f"STDERR: {stage.stderr}\n")
+        if stage.returncode != 0:
+            f.write(f"[{_ts()}] X git add failed\n")
+            log.error("git add build plans failed")
+            return False
+
+        # Check if there is anything staged before committing
+        diff = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+        )
+        if diff.returncode == 0:
+            f.write(f"[{_ts()}] Nothing to commit -- build plans already in index\n")
+            log.info("build plans already committed to master")
+            return True
+
+        commit = subprocess.run(
+            ["git", "commit", "-m", f"chore: coordinator build plans for {game}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if commit.stdout:
+            f.write(commit.stdout)
+        if commit.stderr:
+            f.write(f"STDERR: {commit.stderr}\n")
+
+        if commit.returncode != 0:
+            f.write(f"[{_ts()}] X COMMIT FAILED\n")
+            log.error("build plan commit failed")
+            return False
+
+        f.write(f"[{_ts()}] + Build plans committed to master\n")
+        log.info("build plans committed to master")
+        return True
 
 
 def merge_build_branches(run_log_dir: Path) -> bool:
     """
-    Sequentially merge all build feature branches into HEAD (master).
-    Order: devex first (type stubs), then coding-1/2/3.
+    Phase 3: merge coding-1/2/3 branches into master in dependency order.
 
+    DevEx (feature/build-pipeline) was already merged in Phase 1a and is
+    intentionally excluded here. Merge order: coding-1 -> coding-2 -> coding-3.
     On conflict, stops immediately and prints resolution instructions.
-    On success, removes all build worktrees.
-
+    On success, removes all remaining build worktrees.
     Returns True on success, False on conflict.
     """
     merge_log = run_log_dir / "merge.log"
@@ -661,9 +1098,10 @@ def merge_build_branches(run_log_dir: Path) -> bool:
             f.write(line)
             f.flush()
 
-        write(f"=== Build Branch Merge | {_ts()} ===\n\n")
+        write(f"=== Phase 3: Build Branch Merge | {_ts()} ===\n\n")
+        write("Merging coding branches (DevEx already merged in Phase 1a).\n\n")
 
-        for agent in BUILD_AGENTS:
+        for agent in _PHASE3_MERGE_AGENTS:
             branch = agent["branch"]
             write(f"[{_ts()}] Merging {branch}...\n")
             log.info("merging branch", branch=branch)
@@ -680,20 +1118,20 @@ def merge_build_branches(run_log_dir: Path) -> bool:
                 write(f"STDERR: {result.stderr}\n")
 
             if result.returncode != 0:
-                write(f"\n[{_ts()}] ✗ MERGE CONFLICT in {branch}\n")
+                write(f"\n[{_ts()}] X MERGE CONFLICT in {branch}\n")
                 write("Resolve conflicts manually, then run:\n")
                 write("  git add -A && git merge --continue\n")
                 write("Then re-run the quality tier.\n")
                 log.error(
-                    "merge conflict — manual intervention required",
+                    "merge conflict -- manual intervention required",
                     branch=branch,
                     merge_log=str(merge_log),
                 )
                 return False
 
-            write(f"[{_ts()}] ✓ Merged {branch}\n\n")
+            write(f"[{_ts()}] + Merged {branch}\n\n")
 
-        # Clean up worktrees
+        # Remove all remaining build worktrees (including DevEx which is still checked out)
         write(f"[{_ts()}] Cleaning up worktrees...\n")
         for agent in BUILD_AGENTS:
             worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
@@ -708,7 +1146,7 @@ def merge_build_branches(run_log_dir: Path) -> bool:
                 write(f"[{_ts()}]   Removed {worktree.name}: {status}\n")
 
         subprocess.run(["git", "worktree", "prune"], cwd=REPO_ROOT, capture_output=True)
-        write(f"\n[{_ts()}] ✓ All branches merged. Worktrees cleaned up.\n")
+        write(f"\n[{_ts()}] + All branches merged. Worktrees cleaned up.\n")
         log.info("build merge complete", merge_log=str(merge_log))
 
     return True
@@ -746,18 +1184,17 @@ def run_design_tier(game: str, run_log_dir: Path):
 
 async def run_build_tier_async(game: str, run_log_dir: Path, stop_after: str | None = None):
     """
-    Run the build tier. stop_after controls incremental execution:
-      stop_after="devex"       — run Phase 1 only; inspect src/types/ before continuing
-      stop_after="coordinator" — run Phases 1 + 1.5 only; inspect build plans before coding
-      stop_after=None          — run all phases (default)
+    Run the build tier across five phases. stop_after controls incremental execution:
+      stop_after="devex"       -- run Phase 1 only; inspect src/types/ before continuing
+      stop_after="coordinator" -- run Phases 1 + 1a + 1.5 only; inspect build plans before coding
+      stop_after=None          -- run all phases (default)
     """
     loop = asyncio.get_event_loop()
 
     # -------------------------------------------------------------------------
-    # Phase 1: DevEx — scaffolds build tooling and src/types/ interface stubs.
-    # Coding agents depend on these stubs, so devex must finish first.
+    # Phase 1: DevEx -- scaffold build tooling and src/types/ interface stubs.
     # -------------------------------------------------------------------------
-    log.info("=== Build Tier — Phase 1: DevEx (tooling + interfaces) ===")
+    log.info("=== Build Tier -- Phase 1: DevEx (tooling + interfaces) ===")
     devex_worktree = _ensure_worktree(DEVEX_AGENT)
     devex_log = run_log_dir / f"{DEVEX_AGENT['name']}.log"
 
@@ -767,7 +1204,7 @@ async def run_build_tier_async(game: str, run_log_dir: Path, stop_after: str | N
         )
 
     if devex_result != 0:
-        log.error("devex agent failed — cannot proceed to coordinator", log=str(devex_log))
+        log.error("devex agent failed -- cannot proceed", log=str(devex_log))
         raise SystemExit(1)
     log.info("devex complete")
 
@@ -779,11 +1216,21 @@ async def run_build_tier_async(game: str, run_log_dir: Path, stop_after: str | N
         return
 
     # -------------------------------------------------------------------------
-    # Phase 1.5: Coordinator — reads all design docs + interface stubs, writes
-    # docs/build-plans/<game>-coding-{1,2,3}.md. Runs in the main repo so it
-    # can read src/types/ from devex's worktree output via the repo root.
+    # Phase 1a: Merge DevEx branch into master so the Coordinator and coding
+    # worktrees can see the type stubs in REPO_ROOT/games/{game}/src/types/.
     # -------------------------------------------------------------------------
-    log.info("=== Build Tier — Phase 1.5: Coordinator (build plans) ===")
+    log.info("=== Build Tier -- Phase 1a: Merge DevEx -> master ===")
+    if not merge_devex_branch(run_log_dir):
+        log.error("devex merge failed -- cannot proceed to coordinator")
+        raise SystemExit(1)
+    log.info("devex merge complete -- type stubs now visible on master")
+
+    # -------------------------------------------------------------------------
+    # Phase 1.5: Coordinator -- reads all design docs + type stubs (now on
+    # master), writes docs/build-plans/<game>-coding-{1,2,3}.md.
+    # Runs in the main repo. Key inputs are pre-loaded into its system prompt.
+    # -------------------------------------------------------------------------
+    log.info("=== Build Tier -- Phase 1.5: Coordinator (build plans) ===")
     coordinator_log = run_log_dir / f"{COORDINATOR_AGENT['name']}.log"
 
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -792,9 +1239,19 @@ async def run_build_tier_async(game: str, run_log_dir: Path, stop_after: str | N
         )
 
     if coordinator_result != 0:
-        log.error("coordinator agent failed — cannot proceed to coding phase", log=str(coordinator_log))
+        log.error("coordinator agent failed -- cannot proceed to coding phase", log=str(coordinator_log))
         raise SystemExit(1)
-    log.info("coordinator complete — build plans written to docs/build-plans/")
+    log.info("coordinator complete -- build plans written to docs/build-plans/")
+
+    # -------------------------------------------------------------------------
+    # Phase 1b: Commit build plans to master so coding worktrees (branched from
+    # HEAD) will contain them at creation time.
+    # -------------------------------------------------------------------------
+    log.info("=== Build Tier -- Phase 1b: Commit build plans -> master ===")
+    if not commit_build_plans(game, run_log_dir):
+        log.error("build plan commit failed -- cannot proceed to coding phase")
+        raise SystemExit(1)
+    log.info("build plans committed -- coding worktrees will inherit them from HEAD")
 
     if stop_after == "coordinator":
         log.info(
@@ -804,10 +1261,11 @@ async def run_build_tier_async(game: str, run_log_dir: Path, stop_after: str | N
         return
 
     # -------------------------------------------------------------------------
-    # Phase 2: coding-1/2/3 — parallel, each owns a disjoint set of files.
-    # Each reads docs/build-plans/<game>-coding-{1,2,3}.md before writing code.
+    # Phase 2: coding-1/2/3 -- parallel, each owns a disjoint set of files.
+    # Worktrees branch from updated master (which now has type stubs + build plans).
+    # Key docs are pre-loaded into each agent's system prompt.
     # -------------------------------------------------------------------------
-    log.info("=== Build Tier — Phase 2: Coding Agents (parallel) ===")
+    log.info("=== Build Tier -- Phase 2: Coding Agents (parallel) ===")
     with ThreadPoolExecutor(max_workers=len(CODING_AGENTS)) as executor:
         tasks = [
             run_build_agent_async(agent, game, run_log_dir, executor)
@@ -822,10 +1280,10 @@ async def run_build_tier_async(game: str, run_log_dir: Path, stop_after: str | N
     log.info("all coding agents complete")
 
     # -------------------------------------------------------------------------
-    # Phase 3: Merge all build branches into master; clean up worktrees.
-    # Merge order: devex → coding-1 → coding-2 → coding-3
+    # Phase 3: Merge coding-1/2/3 into master; clean up all worktrees.
+    # DevEx was already merged in Phase 1a -- it is excluded here.
     # -------------------------------------------------------------------------
-    log.info("=== Build Tier — Phase 3: Merge ===")
+    log.info("=== Build Tier -- Phase 3: Merge coding branches ===")
     if not merge_build_branches(run_log_dir):
         raise SystemExit(1)
     log.info("build tier complete")
@@ -835,7 +1293,6 @@ def run_smoke_test(game: str, run_log_dir: Path):
     """
     Run the smoke test agent: reads CLAUDE.md + brief, writes docs/smoke-test.md,
     reads it back. Verifies API connectivity + Read/Write tool execution in ~2 turns.
-    Exits 0 on pass, 1 on failure.
     """
     log.info("=== Smoke Test ===")
     smoke_log = run_log_dir / "smoke.log"
@@ -843,20 +1300,44 @@ def run_smoke_test(game: str, run_log_dir: Path):
     if code != 0:
         log.error("smoke test FAILED", log=str(smoke_log))
         raise SystemExit(1)
-    log.info("smoke test PASSED — API connectivity and file I/O are working")
+    log.info("smoke test PASSED -- API connectivity and file I/O are working")
+
+
+async def _run_quality_tier_async(game: str, run_log_dir: Path):
+    """
+    Run all quality agents in parallel -- none depend on each other's output.
+    Architecture, Security, Accessibility, and Performance are read-only reviewers.
+    QA writes test files but these do not conflict with the other reviewers.
+    Quality failures are warnings only -- the Creative Director decides whether to block.
+    """
+    log.info("=== Quality Tier (parallel) ===")
+    loop = asyncio.get_event_loop()
+
+    with ThreadPoolExecutor(max_workers=len(QUALITY_AGENTS)) as executor:
+        tasks = [
+            loop.run_in_executor(
+                executor,
+                run_agent,
+                agent,
+                game,
+                REPO_ROOT,
+                run_log_dir / f"{agent['name']}.log",
+            )
+            for agent in QUALITY_AGENTS
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for agent, result in zip(QUALITY_AGENTS, results):
+        if isinstance(result, Exception):
+            log.warning("quality agent exception", name=agent["name"], error=str(result))
+        elif result != 0:
+            log.warning("quality agent reported issues", name=agent["name"])
+        else:
+            log.info("quality agent complete", name=agent["name"])
 
 
 def run_quality_tier(game: str, run_log_dir: Path):
-    log.info("=== Quality Tier (sequential) ===")
-    for agent in QUALITY_AGENTS:
-        agent_log = run_log_dir / f"{agent['name']}.log"
-        log.info("running quality agent", name=agent["name"])
-        code = run_agent(agent, game, REPO_ROOT, agent_log)
-        if code != 0:
-            # Quality failures are warnings — Creative Director decides whether to block.
-            log.warning("quality agent reported issues", name=agent["name"], log=str(agent_log))
-        else:
-            log.info("quality agent complete", name=agent["name"])
+    asyncio.run(_run_quality_tier_async(game, run_log_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -896,14 +1377,13 @@ def run_quality_tier(game: str, run_log_dir: Path):
     ),
 )
 def main(game: str, tier: str, stop_after: str | None, clean: bool):
-    """Arcade Swarm supervisor — orchestrates Claude agent swarm via Anthropic SDK."""
+    """Arcade Swarm supervisor -- orchestrates Claude agent swarm via Anthropic SDK."""
     LOGS_DIR.mkdir(exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     run_log_dir = LOGS_DIR / f"{game}-{tier}-{timestamp}"
     run_log_dir.mkdir(exist_ok=True)
     supervisor_log = run_log_dir / "supervisor.log"
 
-    # Consistent timestamped logging: DEBUG to file, INFO to console
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)-8s] %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",

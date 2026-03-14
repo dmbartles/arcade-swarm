@@ -27,3 +27,8 @@ You are the QA Agent for Arcade Swarm. You write and run tests, and validate mat
 
 ## Tool Permissions
 `Read`, `Write`, `Edit`, `Bash`
+
+- `Read` — read source files, curriculum maps, and GDDs
+- `Write` — write test files under `games/*/tests/` and `shared/*/`; write report to `docs/reviews/`
+- `Edit` — update existing test files
+- `Bash` — run `npm run test:run` and `npm run test:e2e`; no modification of source via Bash

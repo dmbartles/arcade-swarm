@@ -38,6 +38,15 @@ shared/math-engine/                       ← owned by coding-3
 - Collision detection via Phaser arcade physics overlaps; emit events on collision
 - `ScoreManager.ts` — implements `IScoreManager`; tracks score in-memory; emits `SCORE_UPDATED` on the Phaser event bus
 
+## Tool Permissions
+`Read`, `Write`, `Edit`, `Bash`, `Glob`
+
+- `Read` — read type stubs, existing source files, and docs within your worktree
+- `Write` — write new source files within your owned directories only
+- `Edit` — update existing source files within your owned directories only
+- `Bash` — run `npm run typecheck`, `npm run lint`, `npm run build`, and `git commit`; never run recursive listings
+- `Glob` — discover existing files by pattern; use this instead of Bash for directory exploration
+
 ## Coding Rules
 - Import `IScoreManager`, `ScoreUpdatedPayload` from `src/types/IScoreManager.ts`
 - Import event names from `src/types/GameEvents.ts` — never use inline string literals for events
@@ -50,7 +59,13 @@ shared/math-engine/                       ← owned by coding-3
 
 ## Your Task
 
-Read `CLAUDE.md` first, then **read `docs/build-plans/<game-name>-coding-2.md` and follow it exactly**. The build plan specifies every entity class, method signature, event payload, and config dependency you must implement. Then read `games/<game-name>/src/types/` for type definitions. Implement all gameplay entities and score management as specified:
+`CLAUDE.md`, the GDD, the visual style guide, and your build plan (`docs/build-plans/<game-name>-coding-2.md`)
+are pre-loaded in your system prompt — do not Read them again. Start directly from the build plan.
+
+Use **Glob** to explore what other agents have created (e.g. `Glob("games/<game-name>/src/types/**")`).
+Never run recursive Bash directory listings (`dir /s`, `find .`) — use Glob instead.
+
+Implement all gameplay entities and score management as specified in your build plan:
 
 1. Write one entity file per game object described in the GDD (missiles, cities, launcher, explosions, answer bubbles, bombers, paratroopers, MIRVs — whatever the GDD specifies)
 2. Each entity must:

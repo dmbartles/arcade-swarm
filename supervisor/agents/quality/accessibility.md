@@ -26,4 +26,9 @@ You are the Accessibility Agent for Arcade Swarm. You review the codebase and ga
 - Rate overall accessibility: Green / Yellow / Red.
 
 ## Tool Permissions
-`Read`, `Grep`, `Glob`
+`Read`, `Glob`, `Grep`, `Write`
+
+- `Read` — read source files and style guides for review
+- `Glob` — discover files matching patterns
+- `Grep` — search for ARIA roles, contrast values, and input handler patterns
+- `Write` — write review report to `docs/reviews/` only; never to `games/` or `shared/`

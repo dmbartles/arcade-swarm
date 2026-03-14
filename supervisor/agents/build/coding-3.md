@@ -49,6 +49,15 @@ games/<game-name>/src/systems/ScoreManager.ts ← owned by coding-2
 - Listens for `LEVEL_COMPLETE` events and adjusts difficulty parameters
 - Exposes `getCurrentConfig(): IDifficultyConfig` for other systems to query
 
+## Tool Permissions
+`Read`, `Write`, `Edit`, `Bash`, `Glob`
+
+- `Read` — read type stubs, existing source files, and docs within your worktree
+- `Write` — write new source files within your owned directories only
+- `Edit` — update existing source files within your owned directories only
+- `Bash` — run `npm run typecheck`, `npm run lint`, `npm run test:run`, and `git commit`; never run recursive listings
+- `Glob` — discover existing files by pattern; use this instead of Bash for directory exploration
+
 ## Coding Rules
 - Import `IMathEngine`, `IMathProblem` from `src/types/` — implement these interfaces exactly
 - Import `IDifficultyConfig` from `src/types/IDifficultyConfig.ts`
@@ -61,7 +70,14 @@ games/<game-name>/src/systems/ScoreManager.ts ← owned by coding-2
 
 ## Your Task
 
-Read `CLAUDE.md` first, then **read `docs/build-plans/<game-name>-coding-3.md` and follow it exactly**. The build plan specifies every generator, method signature, event payload, and skill type you must implement. Then read `docs/curriculum-maps/<game-name>.md` and `games/<game-name>/src/types/` for additional context. Implement the full math and difficulty stack as specified:
+`CLAUDE.md`, the GDD, the visual style guide, the curriculum map, and your build plan
+(`docs/build-plans/<game-name>-coding-3.md`) are pre-loaded in your system prompt — do not Read them again.
+Start directly from the build plan.
+
+Use **Glob** to explore what other agents have created (e.g. `Glob("games/<game-name>/src/types/**")`).
+Never run recursive Bash directory listings (`dir /s`, `find .`) — use Glob instead.
+
+Implement the full math and difficulty stack as specified in your build plan:
 
 1. Implement `shared/math-engine/src/` with one generator per skill type from the curriculum map. Each generator must produce procedurally varied problems — no static lists.
 2. Write unit tests for every generator in `shared/math-engine/src/index.test.ts`. Run `npm run test:run` from `shared/math-engine/` — all tests must pass.

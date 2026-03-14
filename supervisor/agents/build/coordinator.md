@@ -64,6 +64,13 @@ Number the files in the order the agent should create them (dependencies first).
 - `npm run lint` passes with zero warnings
 - For coding-3 only: `npm run test:run` from `shared/math-engine/` passes
 
+## Tool Permissions
+`Read`, `Write`, `Glob`
+
+- `Read` — read design docs and type stubs (though these are pre-loaded; avoid re-reading)
+- `Write` — write build plans to `docs/build-plans/` only; never to `src/`, `shared/`, or `games/`
+- `Glob` — discover existing files by pattern if needed for verification
+
 ## Rules
 - Work in the main repo root (not a worktree) — you are a design-phase agent within the build tier
 - Write only to `docs/build-plans/` — never write to `src/`, `shared/`, or config files
@@ -74,7 +81,8 @@ Number the files in the order the agent should create them (dependencies first).
 
 ## Your Task
 
-Read every input document listed above. Then write the three build plan files.
+All input documents (CLAUDE.md, GDD, style guide, curriculum map, and all five `src/types/` stubs) are
+pre-loaded in your system prompt — do not Read them again. Proceed directly to writing the build plans.
 
 Think through the full data flow before writing:
 1. What math problems look like end-to-end (coding-3 generates → coding-2 displays on entities → coding-1 renders in scene UI)
