@@ -12,7 +12,7 @@ import Phaser from 'phaser';
 import type { IMathProblem } from '../types/IMathProblem';
 import { GameEvents } from '../types/GameEvents';
 import type { ThreatDestroyedPayload, ThreatSpawnedPayload } from '../types/GameEvents';
-import { COLOR_MISSILE_BODY } from '../config/styleConfig';
+import { COLOR_MISSILE_BODY, COLOR_MISSILE_TRAIL } from '../config/styleConfig';
 import { TEXT_MISSILE_PROBLEM } from '../config/styleConfig';
 import { TrajectoryLine } from './TrajectoryLine';
 import type { City } from './City';
@@ -53,6 +53,14 @@ export class StandardMissile extends Phaser.GameObjects.Container {
   private targetCity: City;
   /** Whether the spawn tween has been played. */
   private spawnTweenPlayed: boolean;
+  /** Trail graphics drawn from spawn point to current position (classic Missile Command look). */
+  private trail: Phaser.GameObjects.Graphics;
+  /** World X of the first frame after y is set by WaveManager. */
+  private trailStartX = 0;
+  /** World Y of the first frame after y is set by WaveManager. */
+  private trailStartY = 0;
+  /** True once the trail origin has been locked in on the first preUpdate call. */
+  private trailOriginSet = false;
   /** The threat type for event payloads (protected for subclass override, public getter below). */
   protected _threatType: string = 'standard-missile';
 
@@ -94,6 +102,11 @@ export class StandardMissile extends Phaser.GameObjects.Container {
     const targetPoint = this.targetCity.getTargetPoint();
     this.trajectoryLine = new TrajectoryLine(scene, this, targetPoint);
 
+    // Trail graphics — drawn in world space (not a child of this container)
+    // so it stays fixed while the missile head moves forward.
+    this.trail = scene.add.graphics();
+    this.trail.setDepth(9);
+
     this.setDepth(10);
     scene.add.existing(this);
 
@@ -123,6 +136,21 @@ export class StandardMissile extends Phaser.GameObjects.Container {
   /** Called each frame by Phaser update loop. Moves missile toward target city. */
   preUpdate(time: number, delta: number): void {
     if (this.destroyed) return;
+
+    // Lock in trail origin on the first frame (after WaveManager sets missile.y).
+    if (!this.trailOriginSet) {
+      this.trailStartX = this.x;
+      this.trailStartY = this.y;
+      this.trailOriginSet = true;
+    }
+
+    // Redraw trail from spawn point to current missile head.
+    this.trail.clear();
+    this.trail.lineStyle(2, COLOR_MISSILE_TRAIL, 0.85);
+    this.trail.beginPath();
+    this.trail.moveTo(this.trailStartX, this.trailStartY);
+    this.trail.lineTo(this.x, this.y);
+    this.trail.strokePath();
 
     const targetPoint = this.targetCity.getTargetPoint();
     const dx = targetPoint.x - this.x;
@@ -165,8 +193,9 @@ export class StandardMissile extends Phaser.GameObjects.Container {
     };
     this.scene.events.emit(GameEvents.THREAT_DESTROYED, payload);
 
-    // Remove trajectory line
+    // Remove trajectory line and trail
     this.trajectoryLine.remove();
+    this.trail.destroy();
 
     // Remove from scene
     this.disableInteractive();
@@ -183,8 +212,9 @@ export class StandardMissile extends Phaser.GameObjects.Container {
 
     this.targetCity.hit();
 
-    // Remove trajectory line
+    // Remove trajectory line and trail
     this.trajectoryLine.remove();
+    this.trail.destroy();
 
     // Remove from scene
     this.disableInteractive();

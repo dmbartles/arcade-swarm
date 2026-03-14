@@ -71,7 +71,7 @@ export const CITY_HIT_POINTS = 3;
 
 // ── Missile Speed ────────────────────────────────────────────────────────
 /** Base missile descent speed in px/s (before multipliers). */
-export const BASE_MISSILE_SPEED = 60;
+export const BASE_MISSILE_SPEED = 35;
 /** Interceptor (defender) missile speed in px/s. */
 export const INTERCEPTOR_SPEED = 600;
 

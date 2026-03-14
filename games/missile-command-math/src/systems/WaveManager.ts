@@ -236,7 +236,10 @@ export class WaveManager {
   /** Handle PROBLEM_GENERATED event from MathEngine. */
   private onProblemGenerated(payload: ProblemGeneratedPayload): void {
     this.waveProblems = payload.problems;
-    this.answerQueueData = payload.answerQueue;
+    // Use spawn-order answers so queue[0] always corresponds to the current bomb.
+    // The shuffled payload.answerQueue is independent of spawn order and would
+    // show answers for bombs that haven't appeared yet, confusing players.
+    this.answerQueueData = payload.problems.map((p: IMathProblem) => p.correctAnswer);
     this.totalThreats = this.waveProblems.length;
     this.threatsSpawned = 0;
     this.threatsResolved = 0;
