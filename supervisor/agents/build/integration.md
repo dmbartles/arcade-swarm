@@ -53,6 +53,17 @@ You have at most **50 turns**. Spend them wisely:
 
 **If typecheck produces zero errors on the first run**, skip straight to lint, then commit immediately.
 
+## Definition of Done
+
+You are finished when **all** of the following are true:
+
+- [ ] `npm run typecheck` from `games/<game-name>/` exits with **zero errors**
+- [ ] `npm run lint` from `games/<game-name>/` exits with **zero warnings**
+- [ ] All fixes committed with `fix: integration wiring — resolve cross-agent type errors for <game-name>`
+- [ ] Summary reported: every file changed and what was fixed
+
+Do not stop until every box is checked. If you cannot fix an error, document it clearly in your report so the Creative Director can act on it.
+
 ## Your Task
 
 `CLAUDE.md` and the GDD are pre-loaded in your system prompt — do not Read them again.

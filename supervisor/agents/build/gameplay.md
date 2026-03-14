@@ -82,9 +82,24 @@ You have at most **50 turns**. Spend them wisely:
 
 **If you reach turn 35 without having written all your files**, finish the most critical ones and move directly to typecheck. A working subset is better than a timeout.
 
+## Definition of Done
+
+You are finished when **all** of the following are true:
+
+- [ ] One entity file exists per game object listed in the build plan (missiles, cities, launcher, explosions, etc.)
+- [ ] Every entity extends the correct `Phaser.GameObject` class and emits the events specified in the build plan
+- [ ] `games/<game-name>/src/systems/ScoreManager.ts` exists and implements `IScoreManager`
+- [ ] `ScoreManager` emits `GameEvents.SCORE_UPDATED` with `ScoreUpdatedPayload` on every score change
+- [ ] Touch input wired: tapping the screen fires an interceptor toward the pointer position
+- [ ] `npm run typecheck` from the game directory exits with **zero errors**
+- [ ] `npm run lint` from the game directory exits with **zero warnings**
+- [ ] All changes committed with `feat: implement gameplay entities and ScoreManager for <game-name>`
+
+Do not stop until every box is checked.
+
 ## Your Task
 
-Your build plan (`docs/build-plans/<game-name>-gameplay.md`) is pre-loaded — start directly from it.
+Your build plan (`docs/build-plans/<game-name>-gameplay.md`) is pre-loaded in your system prompt — start directly from it. Do not use the Read tool to re-read it.
 
 Use **Glob** to explore what other agents have created (e.g. `Glob("games/<game-name>/src/types/**")`).
 Use **Grep** to inspect `src/config/` exports before writing any import statements.

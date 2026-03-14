@@ -78,9 +78,23 @@ You have at most **50 turns**. Spend them wisely:
 
 **If you reach turn 35 without having written all your files**, finish the most critical ones and move directly to typecheck. A working subset is better than a timeout.
 
+## Definition of Done
+
+You are finished when **all** of the following are true:
+
+- [ ] `games/<game-name>/src/main.ts` exists; Phaser config includes `parent: 'game-container'`
+- [ ] `games/<game-name>/src/config/gameConfig.ts` exports every constant referenced in the build plan
+- [ ] One `Phaser.Scene` subclass exists per screen described in the build plan (Menu, Game, GameOver, etc.)
+- [ ] `GameScene` wires all event listeners specified in your build plan using names from `GameEvents`
+- [ ] `npm run typecheck` from the game directory exits with **zero errors**
+- [ ] `npm run lint` from the game directory exits with **zero warnings**
+- [ ] All changes committed with `feat: implement game engine scenes and config for <game-name>`
+
+Do not stop until every box is checked.
+
 ## Your Task
 
-Your build plan (`docs/build-plans/<game-name>-engine.md`) is pre-loaded — start directly from it.
+Your build plan (`docs/build-plans/<game-name>-engine.md`) is pre-loaded in your system prompt — start directly from it. Do not use the Read tool to re-read it.
 
 Use **Glob** to explore what the DevEx agent has already created (e.g. `Glob("games/<game-name>/src/types/**")`).
 Never run recursive Bash directory listings (`dir /s`, `find .`) — use Glob instead.

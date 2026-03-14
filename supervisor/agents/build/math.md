@@ -98,9 +98,25 @@ You have at most **50 turns**. Spend them wisely:
 
 **If you reach turn 35 without having written all your files**, finish the most critical ones and move directly to typecheck. A working subset is better than a timeout.
 
+## Definition of Done
+
+You are finished when **all** of the following are true:
+
+- [ ] `shared/math-engine/src/` contains one generator file per skill type in the curriculum map
+- [ ] `shared/math-engine/src/index.ts` exports `generateProblem({ gradeLevel, skillType })` → `{ question, correctAnswer, distractors[] }`
+- [ ] `npm run test:run` from `shared/math-engine/` exits with **zero failures**
+- [ ] `games/<game-name>/src/systems/MathEngine.ts` exists and implements `IMathEngine`
+- [ ] `MathEngine` imports from `@arcade-swarm/math-engine` (not a relative path)
+- [ ] `games/<game-name>/src/systems/DifficultyManager.ts` exists and implements difficulty scaling per the build plan
+- [ ] `npm run typecheck` from the game directory exits with **zero errors**
+- [ ] `npm run lint` from the game directory exits with **zero warnings**
+- [ ] All changes committed with `feat: implement math engine and difficulty system for <game-name>`
+
+Do not stop until every box is checked.
+
 ## Your Task
 
-Your build plan (`docs/build-plans/<game-name>-math.md`) is pre-loaded — start directly from it.
+Your build plan (`docs/build-plans/<game-name>-math.md`) is pre-loaded in your system prompt — start directly from it. Do not use the Read tool to re-read it.
 
 Use **Glob** to explore what other agents have created (e.g. `Glob("games/<game-name>/src/types/**")`).
 Use **Grep** to inspect `src/config/` exports before writing any import statements.
