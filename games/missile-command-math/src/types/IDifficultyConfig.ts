@@ -68,6 +68,9 @@ export interface ILevelConfig {
 
   /** Total number of problems/threats in the wave (10–28, GDD §7.1). */
   problemsInWave: number;
+
+  /** Soft time limit in seconds for the wave (120–210, GDD §7.1). */
+  timeLimitSeconds: number;
 }
 
 /**
@@ -138,6 +141,15 @@ export interface IDifficultyConfig {
 
   /** Number of child warheads a MIRV spawns on split (GDD §5.2: 2–3). */
   mirvChildCount: number;
+
+  /** Number of payload missiles a bomber drops (GDD §7: 2–3). */
+  bomberPayloadCount: number;
+
+  /**
+   * Soft time limit in seconds for the wave (GDD §7.1).
+   * Governs max spawn window; wave ends when all threats resolved or cities fall.
+   */
+  timeLimitSeconds: number;
 }
 
 /** Speed multiplier map for the global difficulty selector (GDD §7.2). */

@@ -49,10 +49,14 @@ export interface IScoreManager {
   getChainCount(): number;
 
   /**
-   * Calculate the star rating for the current wave state.
-   *   - 1 star: Level completed (≥1 city surviving)
-   *   - 2 stars: 4+ cities surviving AND ≥70% accuracy
-   *   - 3 stars: All 6 cities surviving AND ≥85% accuracy AND ≥1 chain reaction
+   * Calculate the star rating for the current wave state (GDD §3).
+   *   - 3 stars: All 6 cities survive (+ bomber intercepted if applicable)
+   *   - 2 stars: 4–5 cities survive
+   *   - 1 star:  1–3 cities survive
+   *   - 0 stars: All cities destroyed (game over)
+   *
+   * Stars are influenced by: cities surviving (primary), chain reactions
+   * achieved, bomber interceptions, and accuracy percentage.
    *
    * @param citiesSurviving - Number of cities still standing (0–6).
    * @returns Star rating (0–3). 0 if all cities destroyed.
@@ -80,22 +84,22 @@ export interface StreakMilestonePayload {
   multiplier: number;
 }
 
-/** Base point values for scoring actions (GDD §6.1). */
+/** Base point values for scoring actions (GDD §6 Scoring Model). */
 export interface IScoreValues {
   /** Standard missile intercepted: +10. */
   standardMissile: number;
-  /** Bomber intercepted before payload drop: +50. */
+  /** City-save bonus when a threatening missile is intercepted: +25. */
+  citySaveBonus: number;
+  /** Bomber intercepted before payload drop: +100. */
   bomberBeforeDrop: number;
-  /** Bomber payload missile intercepted after drop: +10 each. */
-  bomberPayloadMissile: number;
-  /** MIRV intercepted before split: +40. */
+  /** Bomber destroyed after payload drop: +40. */
+  bomberAfterDrop: number;
+  /** MIRV intercepted before split: +60. */
   mirvBeforeSplit: number;
-  /** MIRV child intercepted after split: +10 each. */
+  /** MIRV child intercepted after split: +15. */
   mirvChild: number;
-  /** Paratrooper caught in blast radius: +15. */
+  /** Paratrooper neutralised by blast radius: +15. */
   paratrooper: number;
-  /** Chain reaction bonus per link after the first: +15. */
+  /** Chain reaction bonus per additional link beyond 1st: +20. */
   chainReactionLink: number;
-  /** Perfect wave bonus (all 6 cities intact): +100. */
-  perfectWave: number;
 }

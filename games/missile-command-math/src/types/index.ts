@@ -15,6 +15,7 @@ export type {
   CityHitPayload,
   CityDestroyedPayload,
   CitySavedPayload,
+  CityRebuiltPayload,
   ChainReactionPayload,
   StarRatingUpdatedPayload,
   LevelCompletePayload,
@@ -22,6 +23,8 @@ export type {
   WaveStartedPayload,
   MirvSplitPayload,
   BomberPayloadDroppedPayload,
+  ParatrooperDroppedPayload,
+  ParatrooperLandedPayload,
 } from './GameEvents';
 
 export type { IMathProblem } from './IMathProblem';

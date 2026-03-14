@@ -21,14 +21,20 @@ export const GameEvents = {
   THREAT_DESTROYED: 'threat-destroyed',
   /** Fired when an interceptor missile is launched from the player launcher. */
   INTERCEPTOR_FIRED: 'interceptor-fired',
-  /** Fired when an interceptor reaches its target and explodes. */
+  /** Fired when an interceptor reaches its target and detonates. */
   INTERCEPTOR_DETONATED: 'interceptor-detonated',
+  /** Fired when an explosion animation completes (cleanup trigger). */
+  EXPLOSION_COMPLETE: 'explosion-complete',
   /** Fired when a MIRV splits into child warheads at the split altitude. */
   MIRV_SPLIT: 'mirv-split',
   /** Fired when a bomber drops its payload missiles. */
   BOMBER_PAYLOAD_DROPPED: 'bomber-payload-dropped',
   /** Fired when a paratrooper is caught in an explosion blast radius. */
   PARATROOPER_CAUGHT: 'paratrooper-caught',
+  /** Fired when a paratrooper successfully lands on a city. */
+  PARATROOPER_LANDED: 'paratrooper-landed',
+  /** Fired when a paratrooper transport drops a paratrooper. */
+  PARATROOPER_DROPPED: 'paratrooper-dropped',
 
   // ── City Events ─────────────────────────────────────────────────────────
   /** Fired when a city takes a hit (missile/paratrooper reaches it). */
@@ -37,6 +43,8 @@ export const GameEvents = {
   CITY_DESTROYED: 'city-destroyed',
   /** Fired when a city is saved (its targeting missile was intercepted). */
   CITY_SAVED: 'city-saved',
+  /** Fired when a city is rebuilt between levels. */
+  CITY_REBUILT: 'city-rebuilt',
 
   // ── Queue Events ────────────────────────────────────────────────────────
   /** Fired when the answer queue advances to the next loaded round. */
@@ -65,6 +73,9 @@ export const GameEvents = {
   GAME_OVER: 'game-over',
   /** Fired when the wave starts (after interstitial dismissed). */
   WAVE_STARTED: 'wave-started',
+
+  /** Fired when all 10 levels are completed (INF Treaty victory). */
+  SESSION_VICTORY: 'session-victory',
 
   // ── Training Events ─────────────────────────────────────────────────────
   /** Fired when the training wave is completed successfully. */
@@ -116,6 +127,7 @@ export interface AnswerValidatedPayload {
 export type ThreatType =
   | 'standard-missile'
   | 'bomber'
+  | 'bomber-missile'
   | 'paratrooper-transport'
   | 'paratrooper'
   | 'mirv'
@@ -173,7 +185,7 @@ export interface CitySavedPayload {
 export interface ChainReactionPayload {
   /** Number of links in this chain (1 = first chain hit, 2 = second, etc.). */
   chainLength: number;
-  /** Bonus points from this chain link (+15 per link after first, GDD §6.2). */
+  /** Bonus points from this chain link (+20 per link after first, GDD §6). */
   bonusPoints: number;
 }
 
@@ -231,4 +243,30 @@ export interface BomberPayloadDroppedPayload {
   bomberThreatId: string;
   /** IDs of the dropped missile threats. */
   droppedMissileIds: string[];
+}
+
+/** Payload for PARATROOPER_DROPPED. */
+export interface ParatrooperDroppedPayload {
+  /** ID of the transport plane that dropped the paratrooper. */
+  transportId: string;
+  /** ID of the newly spawned paratrooper. */
+  paratrooperId: string;
+  /** Index of the targeted city (0–5). */
+  targetCityIndex: number;
+}
+
+/** Payload for PARATROOPER_LANDED. */
+export interface ParatrooperLandedPayload {
+  /** ID of the paratrooper that landed. */
+  paratrooperId: string;
+  /** Index of the city the paratrooper landed on (0–5). */
+  cityIndex: number;
+}
+
+/** Payload for CITY_REBUILT. */
+export interface CityRebuiltPayload {
+  /** Index of the rebuilt city (0–5). */
+  cityIndex: number;
+  /** Name of the rebuilt city. */
+  cityName: string;
 }
