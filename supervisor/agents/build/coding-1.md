@@ -44,7 +44,8 @@ shared/math-engine/                     ← owned by coding-3
 - `Read` — read type stubs, existing source files, and docs within your worktree
 - `Write` — write new source files within your owned directories only
 - `Edit` — update existing source files within your owned directories only
-- `Bash` — run `npm run typecheck`, `npm run lint`, `npm run build`, and `git commit`; never run recursive listings
+- `Bash` — run `npm run typecheck`, `npm run lint`, `npm run build`, and `git commit`; never run recursive listings;
+           this runs on Windows — do not use `tail`, `ls`, `grep`, `2>/dev/null`, or other Unix-only shell syntax
 - `Glob` — discover existing files by pattern; use this instead of Bash for directory exploration
 
 ## Coding Rules
@@ -52,6 +53,8 @@ shared/math-engine/                     ← owned by coding-3
 - Import interface types from `src/types/` wherever applicable
 - All config values in `src/config/` — no magic numbers anywhere else
 - Scenes never hold direct references to other scenes
+- **Phaser namespace**: every file that uses `Phaser.GameObjects.*`, `Phaser.Physics.*`, or any Phaser type must
+  include `import Phaser from 'phaser'` at the top — Phaser does not auto-inject its namespace into TypeScript
 - Follow all patterns in CLAUDE.md exactly
 - Mobile-first: all pointer/touch events use `this.input.on('pointerdown', ...)` not mouse-only APIs
 - Run `npm run typecheck` and `npm run lint` before finishing — fix all errors
@@ -79,4 +82,5 @@ Implement the full game engine layer as specified in your build plan:
    - `SCORE_UPDATED` → update the score display
    - `GAME_OVER` → transition to GameOverScene
 5. Run `npm run typecheck && npm run lint` from the game directory. Fix all errors.
-6. Commit with: `feat: implement game engine scenes and config for <game-name>`
+6. **As soon as both pass, commit immediately** — do not re-run checks or do additional verification.
+   Commit with: `feat: implement game engine scenes and config for <game-name>`

@@ -55,7 +55,8 @@ games/<game-name>/src/systems/ScoreManager.ts ← owned by coding-2
 - `Read` — read type stubs, existing source files, and docs within your worktree
 - `Write` — write new source files within your owned directories only
 - `Edit` — update existing source files within your owned directories only
-- `Bash` — run `npm run typecheck`, `npm run lint`, `npm run test:run`, and `git commit`; never run recursive listings
+- `Bash` — run `npm run typecheck`, `npm run lint`, `npm run test:run`, and `git commit`; never run recursive listings;
+           this runs on Windows — do not use `tail`, `ls`, `grep`, `2>/dev/null`, or other Unix-only shell syntax
 - `Glob` — discover existing files by pattern; use this instead of Bash for directory exploration
 
 ## Coding Rules
@@ -65,6 +66,15 @@ games/<game-name>/src/systems/ScoreManager.ts ← owned by coding-2
 - `skillType` values in `shared/math-engine/` must match exactly what is in `docs/curriculum-maps/`
 - Every generator function must have at least one unit test
 - No hardcoded problem strings or static answer arrays — all problems are procedurally generated
+- **Phaser namespace**: `MathEngine.ts` and `DifficultyManager.ts` use Phaser types — include
+  `import Phaser from 'phaser'` at the top of each file; Phaser does not auto-inject its namespace
+- **Shared library import**: in `MathEngine.ts`, import from `@arcade-swarm/math-engine` (the npm
+  workspace package) — never use a relative path like `../../shared/`; the tsconfig `rootDir` blocks those.
+  Before writing MathEngine.ts, ensure `shared/math-engine/package.json` has a `"types": "./src/index.ts"`
+  field so TypeScript resolves the package correctly — add it if missing.
+- **Config stubs**: you run in parallel with Coding Agent 1, so `src/config/` files may not exist yet.
+  If they are missing, create minimal stub versions with placeholder values so your code compiles.
+  Coding Agent 1 will overwrite them with correct values — your stubs are just for compilation.
 - Follow all patterns in CLAUDE.md exactly
 - Run `npm run typecheck` and `npm run lint` from the game directory before finishing — fix all errors
 
@@ -84,4 +94,5 @@ Implement the full math and difficulty stack as specified in your build plan:
 3. Write `games/<game-name>/src/systems/MathEngine.ts` implementing `IMathEngine`. Wire it to the Phaser event bus.
 4. Write `games/<game-name>/src/systems/DifficultyManager.ts` implementing difficulty scaling per the GDD's level progression.
 5. Run `npm run typecheck && npm run lint` from the game directory. Fix all errors.
-6. Commit with: `feat: implement math engine and difficulty system for <game-name>`
+6. **As soon as both pass, commit immediately** — do not re-run checks or do additional verification.
+   Commit with: `feat: implement math engine and difficulty system for <game-name>`
