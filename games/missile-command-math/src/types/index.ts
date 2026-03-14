@@ -46,3 +46,19 @@ export type {
 } from './IDifficultyConfig';
 
 export type { IMathEngine } from './IMathEngine';
+
+export type {
+  IThreat,
+  IStandardMissile,
+  IBomberMissile,
+  IMIRVMissile,
+  IMIRVChild,
+  IStrategicBomber,
+  IParatrooperPlane,
+  IParatrooper,
+  ILauncher,
+  IAnswerQueue,
+  IExplosion,
+  ICity,
+  ITrajectoryLine,
+} from './IEntity';
