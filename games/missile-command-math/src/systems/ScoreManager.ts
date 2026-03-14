@@ -80,7 +80,7 @@ export class ScoreManager implements IScoreManager {
     this.streak += 1;
 
     // Check if we've hit a milestone
-    if (STREAK_MILESTONE_THRESHOLDS.includes(this.streak)) {
+    if ((STREAK_MILESTONE_THRESHOLDS as readonly number[]).includes(this.streak)) {
       const entry = STREAK_MULTIPLIERS.find((e) => this.streak >= e.minStreak);
       if (entry) {
         const payload: StreakMilestonePayload = {

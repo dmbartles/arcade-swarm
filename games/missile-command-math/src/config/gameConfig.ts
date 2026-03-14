@@ -29,13 +29,11 @@ export const LAUNCHER_X = 240;
 /** Y position for the launcher. */
 export const LAUNCHER_Y = 730;
 
-// ── City Layout — Two Rows of 3 ─────────────────────────────────────────
-/** Y position for the top city row (NYC, CHI, LAX). */
-export const CITY_ROW_TOP_Y = 60;
-/** Y position for the bottom city row (HOU, DC, SEA). */
-export const CITY_ROW_BOTTOM_Y = 580;
-/** X positions shared by both city rows. */
-export const CITY_X_POSITIONS = [12, 192, 372] as const;
+// ── City Layout — Single Row at Ground Level ────────────────────────────
+/** Y position for all cities (ground level, flush with play field bottom). */
+export const CITY_ROW_Y = 708;
+/** X positions for 6 cities: 3 left of launcher, 3 right. */
+export const CITY_X_POSITIONS = [40, 120, 200, 280, 360, 440] as const;
 
 // ── Queue Slot Layout ────────────────────────────────────────────────────
 /** X center of the loaded (first) queue slot. */
@@ -70,6 +68,12 @@ export const MIRV_SPLIT_ALTITUDE_PERCENT = 40;
 // ── City ─────────────────────────────────────────────────────────────────
 /** Default hit points per city. */
 export const CITY_HIT_POINTS = 3;
+
+// ── Missile Speed ────────────────────────────────────────────────────────
+/** Base missile descent speed in px/s (before multipliers). */
+export const BASE_MISSILE_SPEED = 60;
+/** Interceptor (defender) missile speed in px/s. */
+export const INTERCEPTOR_SPEED = 600;
 
 // ── Wave Timing ──────────────────────────────────────────────────────────
 /** Milliseconds between spawns at Level 1 Normal difficulty. */

@@ -33,6 +33,8 @@ everything else untouched.
 - `Bash` — run `npm run typecheck`, `npm run lint`, `npm run test:run`, and `git commit`;
            never run recursive directory listings
 - `Glob` — discover existing files by pattern; use instead of Bash for file discovery
+- `Grep` — search file contents by pattern; **always use the Grep tool** instead of running
+           `grep` or `rg` via Bash (those commands are not available on Windows)
 
 ## Your Task
 
@@ -41,8 +43,12 @@ The game name and fix description have been provided below. Do the following ste
 1. Read the fix description carefully.
 2. Use `Glob` and `Read` to locate and understand the relevant source files.
    Do not read files unrelated to the fix.
-3. Implement the minimum change needed to address the fix description.
-4. Run `npm run typecheck && npm run lint` from the game directory. Fix all errors.
-5. If the fix touches logic covered by existing tests, run `npm run test:run` and fix failures.
-6. Commit with a message starting with `fix:` that describes what changed and why.
-7. Report what you changed and confirm the fix is complete.
+3. **Before editing any file, verify the constructor/function signatures** of every class
+   you intend to instantiate or call. Use `Grep` to find `constructor` in the relevant file.
+4. Implement the minimum change needed to address the fix description.
+5. Run `npm run typecheck && npm run lint` from the game directory. Fix all errors.
+6. If the fix touches logic covered by existing tests, run `npm run test:run` and fix failures.
+7. **As soon as typecheck and lint both pass, commit immediately.**
+   Do not re-run checks or do additional verification.
+   Commit with: `fix: <concise description of what was changed and why>`
+8. Report what you changed and confirm the fix is complete.

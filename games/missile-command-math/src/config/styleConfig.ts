@@ -19,6 +19,13 @@ export const COLOR_QUEUE_LOADED = 0xffd700;
 export const COLOR_QUEUE_MATCH = 0x7fffb2;
 export const COLOR_QUEUE_SPENT = 0x3a3a3a;
 export const COLOR_QUEUE_PENDING = 0xb0c4b0;
+/** CSS hex string for queue loaded slot colour (used in Text styles). */
+export const COLOR_QUEUE_LOADED_STR = '#FFD700';
+/** CSS hex string for queue pending slot colour (used in Text styles). */
+export const COLOR_QUEUE_PENDING_STR = '#B0C4B0';
+/** CSS hex string for queue match highlight colour (used in Text styles). */
+export const COLOR_QUEUE_MATCH_STR = '#7FFFB2';
+
 export const COLOR_MISSILE_BODY = 0xcc2200;
 export const COLOR_MISSILE_TRAIL = 0xff6633;
 export const COLOR_DEFENDER = 0x00aaff;

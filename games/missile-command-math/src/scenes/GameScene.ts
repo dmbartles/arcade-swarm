@@ -11,8 +11,11 @@
 import Phaser from 'phaser';
 import {
   CANVAS_WIDTH, CITY_X_POSITIONS,
-  CITY_ROW_TOP_Y, CITY_ROW_BOTTOM_Y,
+  CITY_ROW_Y,
   TOTAL_CITIES, CITY_NAMES,
+  LAUNCHER_X, LAUNCHER_Y,
+  QUEUE_STRIP_Y, QUEUE_STRIP_HEIGHT,
+  QUEUE_SLOT_0_X, QUEUE_SLOT_Y,
 } from '../config/gameConfig';
 import { LEVEL_CONFIGS } from '../config/levelConfig';
 import { COLOR_BG } from '../config/styleConfig';
@@ -31,6 +34,13 @@ import type { ScoreUpdatedPayload, StreakMilestonePayload } from '../types/IScor
 import type { DifficultySetting } from '../types/IDifficultyConfig';
 import HUDSystem from '../systems/HUDSystem';
 import EffectsSystem from '../systems/EffectsSystem';
+import { DifficultyManager } from '../systems/DifficultyManager';
+import { MathEngine } from '../systems/MathEngine';
+import { ScoreManager } from '../systems/ScoreManager';
+import { WaveManager } from '../systems/WaveManager';
+import { Launcher } from '../entities/Launcher';
+import { AnswerQueue } from '../entities/AnswerQueue';
+import { City } from '../entities/City';
 
 interface GameSceneData {
   level: number;
@@ -51,10 +61,14 @@ export default class GameScene extends Phaser.Scene {
   private citiesRemaining = TOTAL_CITIES;
   private isPaused = false;
 
-  // Cross-agent system references (initialised in create if modules exist)
-  // These are typed as `unknown` since this agent does not own the implementations.
-  // Actual integration happens when all agents' code is merged.
-  private waveManager: { update(time: number, delta: number): void } | null = null;
+  // Cross-agent system references
+  private difficultyManager!: DifficultyManager;
+  private mathEngine!: MathEngine;
+  private scoreManager!: ScoreManager;
+  private waveManager!: WaveManager;
+  private launcher!: Launcher;
+  private answerQueue!: AnswerQueue;
+  private cities: City[] = [];
 
   constructor() {
     super({ key: 'GameScene' });
@@ -93,52 +107,62 @@ export default class GameScene extends Phaser.Scene {
   update(time: number, delta: number): void {
     if (this.isPaused) return;
 
-    if (this.waveManager) {
-      this.waveManager.update(time, delta);
-    }
+    this.waveManager.update(time, delta);
     this.hudSystem.update();
     this.effectsSystem.update();
   }
 
   /**
-   * Attempt to import and initialise systems from Coding Agents 2 and 3.
-   * These may not exist yet during parallel development — failures are silent.
+   * Initialise cross-agent systems: DifficultyManager, MathEngine,
+   * ScoreManager, Launcher, AnswerQueue, City entities, and WaveManager.
    */
   private initCrossAgentSystems(): void {
-    // DifficultyManager (Agent 3)
-    // MathEngine (Agent 3)
-    // WaveManager (Agent 2)
-    // ScoreManager (Agent 2)
-    // Launcher, AnswerQueue, City entities (Agent 2)
-    //
-    // These will be wired up when all agent branches are merged.
-    // For now, GameScene is fully functional for its own responsibilities:
-    // scene lifecycle, HUD, effects, event routing, and transitions.
+    // DifficultyManager emits DIFFICULTY_CHANGED immediately on construction
+    this.difficultyManager = new DifficultyManager(this, this.level, this.difficulty);
+
+    // MathEngine listens for WAVE_STARTED → emits PROBLEM_GENERATED
+    this.mathEngine = new MathEngine(this);
+
+    // ScoreManager tracks points, streaks, accuracy
+    this.scoreManager = new ScoreManager(this);
+
+    // Create City entities at ground level
+    this.cities = [];
+    for (let i = 0; i < TOTAL_CITIES; i++) {
+      const city = new City(
+        this,
+        i,
+        CITY_NAMES[i],
+        CITY_X_POSITIONS[i],
+        CITY_ROW_Y,
+      );
+      this.cities.push(city);
+    }
+
+    // Launcher — bottom-center answer-queue turret
+    this.launcher = new Launcher(this, LAUNCHER_X, LAUNCHER_Y);
+
+    // AnswerQueue — visual strip below play field
+    this.answerQueue = new AnswerQueue(this, QUEUE_SLOT_0_X, QUEUE_SLOT_Y);
+
+    // WaveManager — orchestrates spawning and intercept handling
+    const diffConfig = this.difficultyManager.getConfig();
+    this.waveManager = new WaveManager(
+      this,
+      diffConfig,
+      this.scoreManager,
+      this.answerQueue,
+      this.launcher,
+      this.cities,
+    );
   }
 
-  /** Create simple city placeholder visuals for layout reference. */
+  /** Add city name labels beneath City entities (cities created in initCrossAgentSystems). */
   private createCityPlaceholders(): void {
-    const cityPositions = [
-      // Top row: indices 0, 1, 2
-      { x: CITY_X_POSITIONS[0] + 32, y: CITY_ROW_TOP_Y + 28 },
-      { x: CITY_X_POSITIONS[1] + 32, y: CITY_ROW_TOP_Y + 28 },
-      { x: CITY_X_POSITIONS[2] + 32, y: CITY_ROW_TOP_Y + 28 },
-      // Bottom row: indices 3, 4, 5
-      { x: CITY_X_POSITIONS[0] + 32, y: CITY_ROW_BOTTOM_Y + 28 },
-      { x: CITY_X_POSITIONS[1] + 32, y: CITY_ROW_BOTTOM_Y + 28 },
-      { x: CITY_X_POSITIONS[2] + 32, y: CITY_ROW_BOTTOM_Y + 28 },
-    ];
-
     for (let i = 0; i < TOTAL_CITIES; i++) {
-      const pos = cityPositions[i];
-      // Draw a simple city silhouette placeholder
-      const g = this.add.graphics();
-      g.fillStyle(0xffd700, 1);
-      g.fillRect(pos.x - 24, pos.y - 20, 48, 40);
-      g.setDepth(5);
-
-      // City name label
-      this.add.text(pos.x, pos.y + 28, CITY_NAMES[i], {
+      const city = this.cities[i];
+      // City name label positioned just below the city entity
+      this.add.text(city.x, city.y + 36, CITY_NAMES[i], {
         fontFamily: '"Press Start 2P", monospace',
         fontSize: '6px',
         color: '#E8F4E8',
@@ -147,19 +171,19 @@ export default class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Create the queue strip background and launcher area visuals. */
+  /** Create the queue strip background and ground line visual elements. */
   private createPlayfieldElements(): void {
     // Queue strip background
     const queueBg = this.add.graphics();
     queueBg.fillStyle(0x0d1a0d, 1);
-    queueBg.fillRect(0, 782, CANVAS_WIDTH, 72);
+    queueBg.fillRect(0, QUEUE_STRIP_Y, CANVAS_WIDTH, QUEUE_STRIP_HEIGHT);
     queueBg.setDepth(4);
 
-    // Launcher base placeholder
-    const launcherG = this.add.graphics();
-    launcherG.fillStyle(0x00ff88, 1);
-    launcherG.fillRect(216, 730, 48, 36);
-    launcherG.setDepth(5);
+    // Ground line just above city row for visual grounding
+    const groundLine = this.add.graphics();
+    groundLine.lineStyle(2, 0x1a3a1a, 1);
+    groundLine.lineBetween(0, CITY_ROW_Y + 24, CANVAS_WIDTH, CITY_ROW_Y + 24);
+    groundLine.setDepth(3);
   }
 
   /** Wire up all event listeners. */
