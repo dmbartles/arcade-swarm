@@ -15,6 +15,6 @@
     "allowJs": true,
     "outDir": "./dist"
   },
-  "include": ["index.js", "src"],
+  "include": ["index.js", "src", "tests"],
   "exclude": ["node_modules", "dist"]
 }

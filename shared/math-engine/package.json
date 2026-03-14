@@ -4,8 +4,13 @@
   "description": "Procedural math problem generator aligned to Common Core standards. Zero game-engine dependencies.",
   "type": "module",
   "main": "index.js",
+  "types": "./src/index.ts",
   "exports": {
-    ".": "./index.js"
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./index.js"
+    }
   },
   "scripts": {
     "test": "vitest",
