@@ -21,6 +21,7 @@ import VictoryScene from './scenes/VictoryScene';
 /** Phaser game configuration. */
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
+  parent: 'game-container',
   width: CANVAS_WIDTH,
   height: CANVAS_HEIGHT,
   backgroundColor: '#0A0A0F',
