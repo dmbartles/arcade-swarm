@@ -41,6 +41,11 @@ Agent tiers (in order):
        accessibility → docs/reviews/accessibility.md
        performance   → docs/reviews/performance.md
 
+  4. Patch tier — single agent; targeted fixes to an already-built game
+       patch         → reads relevant source, makes minimum change, runs typecheck/lint, commits
+       Accepts a fix description via --fix (inline string) or --fix-file (path to a markdown file).
+       Use --then-quality to automatically run the quality tier after the patch completes.
+
 Key design choices for token efficiency:
   - Tiered model selection: Opus only for coding agents; Sonnet for design/quality/coord; Haiku for smoke.
   - Prompt caching: system prompt (including pre-loaded docs) is sent with cache_control=ephemeral.
@@ -55,10 +60,22 @@ Usage:
     python main.py --game missile-command-math --tier build
     python main.py --game missile-command-math --tier build --stop-after devex        <- stop after Phase 1; inspect games/missile-command-math/src/types/
     python main.py --game missile-command-math --tier build --stop-after coordinator  <- stop after Phase 1.5; inspect docs/build-plans/
+    python main.py --game missile-command-math --tier build --start-after devex       <- skip Phase 1; resume from coordinator
+    python main.py --game missile-command-math --tier build --start-after coordinator <- skip Phases 1/1a/1.5/1b; resume from coding agents
     python main.py --game missile-command-math --tier build --clean   <- wipe worktrees + branches before building
     python main.py --game missile-command-math --tier clean            <- wipe worktrees + branches only (no build)
     python main.py --game missile-command-math --tier quality
     python main.py --game missile-command-math --tier smoke   <- quick API + file I/O check (~2 turns)
+
+  Patch tier (post-build targeted fixes):
+    python main.py --game missile-command-math --tier patch --fix "score display doesn't update after chain reactions"
+    python main.py --game missile-command-math --tier patch --fix-file docs/fixes/score-bug.md
+    python main.py --game missile-command-math --tier patch --fix "..." --then-quality
+    python main.py --game missile-command-math --tier patch --fix-file docs/fixes/score-bug.md --then-quality
+
+  --fix        Inline fix description (one-liners, quick bugs)
+  --fix-file   Path to a markdown file with a detailed fix description, reproduction steps,
+               context, or multi-step instructions. Relative to the repo root.
 
 Prerequisites:
     1. Copy ../.env.example to ../.env and set ANTHROPIC_API_KEY
@@ -101,7 +118,7 @@ SMOKE_MODEL   = "claude-haiku-4-5-20251001" # 2-turn API + file I/O connectivity
 # ---------------------------------------------------------------------------
 # Tiered token limits
 # ---------------------------------------------------------------------------
-DESIGN_MAX_TOKENS  = 8_192    # markdown documents from briefs
+DESIGN_MAX_TOKENS  = 12_288   # structured templates cap output; 12k is generous headroom
 COORD_MAX_TOKENS   = 16_384   # three detailed build plan files
 BUILD_MAX_TOKENS   = 32_768   # full game modules (Opus 4.6 supports 128K output)
 QUALITY_MAX_TOKENS = 8_192    # review reports
@@ -489,7 +506,17 @@ DEVEX_AGENT = {
     "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
     "model": BUILD_MODEL,
     "max_tokens": BUILD_MAX_TOKENS,
-    "preload": ["CLAUDE.md", "docs/gdds/{game}.md"],
+    "preload": [
+        "CLAUDE.md",
+        "docs/gdds/{game}.md",
+        # Type stubs -- written by DevEx itself; present on re-runs, skipped gracefully on first run
+        "games/{game}/src/types/GameEvents.ts",
+        "games/{game}/src/types/IMathProblem.ts",
+        "games/{game}/src/types/IMathEngine.ts",
+        "games/{game}/src/types/IScoreManager.ts",
+        "games/{game}/src/types/IDifficultyConfig.ts",
+        "games/{game}/src/types/index.ts",
+    ],
 }
 
 # Phase 1.5 -- Coordinator: reads all design docs + type stubs, writes build plans.
@@ -532,6 +559,14 @@ CODING_AGENTS = [
             "docs/gdds/{game}.md",
             "docs/style-guides/{game}.md",
             "docs/build-plans/{game}-coding-1.md",
+            # Type stubs -- pre-loaded so the agent knows exact exports before writing imports,
+            # avoiding typecheck failures caused by importing from the wrong source file.
+            "games/{game}/src/types/GameEvents.ts",
+            "games/{game}/src/types/IMathProblem.ts",
+            "games/{game}/src/types/IMathEngine.ts",
+            "games/{game}/src/types/IScoreManager.ts",
+            "games/{game}/src/types/IDifficultyConfig.ts",
+            "games/{game}/src/types/index.ts",
         ],
     },
     {
@@ -547,6 +582,13 @@ CODING_AGENTS = [
             "docs/gdds/{game}.md",
             "docs/style-guides/{game}.md",
             "docs/build-plans/{game}-coding-2.md",
+            # Type stubs -- pre-loaded so the agent knows exact exports before writing imports.
+            "games/{game}/src/types/GameEvents.ts",
+            "games/{game}/src/types/IMathProblem.ts",
+            "games/{game}/src/types/IMathEngine.ts",
+            "games/{game}/src/types/IScoreManager.ts",
+            "games/{game}/src/types/IDifficultyConfig.ts",
+            "games/{game}/src/types/index.ts",
         ],
     },
     {
@@ -563,6 +605,13 @@ CODING_AGENTS = [
             "docs/style-guides/{game}.md",
             "docs/curriculum-maps/{game}.md",
             "docs/build-plans/{game}-coding-3.md",
+            # Type stubs -- pre-loaded so the agent knows exact exports before writing imports.
+            "games/{game}/src/types/GameEvents.ts",
+            "games/{game}/src/types/IMathProblem.ts",
+            "games/{game}/src/types/IMathEngine.ts",
+            "games/{game}/src/types/IScoreManager.ts",
+            "games/{game}/src/types/IDifficultyConfig.ts",
+            "games/{game}/src/types/index.ts",
         ],
     },
 ]
@@ -619,6 +668,26 @@ QUALITY_AGENTS = [
     },
 ]
 
+# Patch tier -- single agent; targeted fixes to an already-built game.
+# Runs in the main repo (no worktree) -- the game is already on master.
+# Fix description is injected at runtime via run_patch_tier(); not hardcoded here.
+PATCH_AGENT = {
+    "name": "patch",
+    "prompt": "agents/patch/patch.md",
+    "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
+    "model": BUILD_MODEL,       # Opus: same as coding agents; patches require the same precision
+    "max_tokens": BUILD_MAX_TOKENS,
+    "preload": [
+        "CLAUDE.md",
+        "docs/gdds/{game}.md",
+        "games/{game}/src/types/GameEvents.ts",
+        "games/{game}/src/types/IMathProblem.ts",
+        "games/{game}/src/types/IMathEngine.ts",
+        "games/{game}/src/types/IScoreManager.ts",
+        "games/{game}/src/types/IDifficultyConfig.ts",
+    ],
+}
+
 # All agents that use worktrees (used by clean / worktree management)
 BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
 
@@ -630,10 +699,20 @@ _PHASE3_MERGE_AGENTS = CODING_AGENTS
 # Agent runner
 # ---------------------------------------------------------------------------
 
-def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
+def run_agent(
+    agent: dict,
+    game: str,
+    cwd: Path,
+    agent_log_file: Path,
+    extra_task_context: str | None = None,
+) -> int:
     """
     Run a single agent via the Anthropic SDK tool-use loop.
     Returns 0 on success, 1 on failure.
+
+    extra_task_context -- optional string prepended to the agent's task section in
+    the first user message. Used by the patch tier to inject the fix description at
+    runtime without modifying the agent's prompt file.
 
     Token efficiency features:
     - Agent-specific model and max_tokens (tiered per role).
@@ -699,10 +778,14 @@ def run_agent(agent: dict, game: str, cwd: Path, agent_log_file: Path) -> int:
             + "\n\n"
         )
 
+    task_body = task_section.strip()
+    if extra_task_context:
+        task_body = extra_task_context.strip() + "\n\n" + task_body
+
     user_message = (
         f"Game name: {game}\n\n"
         + preload_notice
-        + f"## Your Task\n{task_section.strip()}"
+        + f"## Your Task\n{task_body}"
     )
 
     tools    = [ALL_TOOLS[t] for t in agent["tools"] if t in ALL_TOOLS]
@@ -1182,83 +1265,101 @@ def run_design_tier(game: str, run_log_dir: Path):
         log.info("design agent complete", name=agent["name"])
 
 
-async def run_build_tier_async(game: str, run_log_dir: Path, stop_after: str | None = None):
+async def run_build_tier_async(
+    game: str,
+    run_log_dir: Path,
+    stop_after: str | None = None,
+    start_after: str | None = None,
+):
     """
-    Run the build tier across five phases. stop_after controls incremental execution:
-      stop_after="devex"       -- run Phase 1 only; inspect src/types/ before continuing
-      stop_after="coordinator" -- run Phases 1 + 1a + 1.5 only; inspect build plans before coding
-      stop_after=None          -- run all phases (default)
+    Run the build tier across five phases.
+
+    stop_after  -- stop after the named phase for inspection before continuing:
+      "devex"       -- run Phase 1 only; inspect src/types/ before continuing
+      "coordinator" -- run Phases 1–1b only; inspect docs/build-plans/ before coding
+
+    start_after -- skip phases up to and including the named phase (resume mode):
+      "devex"       -- skip Phase 1/1a; assume feature/build-pipeline already merged;
+                       resume from Phase 1.5 (coordinator)
+      "coordinator" -- skip Phases 1/1a/1.5/1b; assume build plans already committed;
+                       resume from Phase 2 (coding agents)
     """
     loop = asyncio.get_event_loop()
 
     # -------------------------------------------------------------------------
     # Phase 1: DevEx -- scaffold build tooling and src/types/ interface stubs.
     # -------------------------------------------------------------------------
-    log.info("=== Build Tier -- Phase 1: DevEx (tooling + interfaces) ===")
-    devex_worktree = _ensure_worktree(DEVEX_AGENT)
-    devex_log = run_log_dir / f"{DEVEX_AGENT['name']}.log"
+    if start_after in ("devex", "coordinator"):
+        log.info("=== Build Tier -- Phase 1: DevEx (SKIPPED via --start-after) ===")
+    else:
+        log.info("=== Build Tier -- Phase 1: DevEx (tooling + interfaces) ===")
+        devex_worktree = _ensure_worktree(DEVEX_AGENT)
+        devex_log = run_log_dir / f"{DEVEX_AGENT['name']}.log"
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        devex_result = await loop.run_in_executor(
-            executor, run_agent, DEVEX_AGENT, game, devex_worktree, devex_log
-        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            devex_result = await loop.run_in_executor(
+                executor, run_agent, DEVEX_AGENT, game, devex_worktree, devex_log
+            )
 
-    if devex_result != 0:
-        log.error("devex agent failed -- cannot proceed", log=str(devex_log))
-        raise SystemExit(1)
-    log.info("devex complete")
+        if devex_result != 0:
+            log.error("devex agent failed -- cannot proceed", log=str(devex_log))
+            raise SystemExit(1)
+        log.info("devex complete")
 
-    if stop_after == "devex":
-        log.info(
-            "Stopped after devex (--stop-after devex). "
-            f"Inspect worktree at {devex_worktree} then re-run with --stop-after coordinator or no flag."
-        )
-        return
+        if stop_after == "devex":
+            log.info(
+                "Stopped after devex (--stop-after devex). "
+                f"Inspect worktree at {devex_worktree} then re-run with --start-after devex or --stop-after coordinator."
+            )
+            return
 
-    # -------------------------------------------------------------------------
-    # Phase 1a: Merge DevEx branch into master so the Coordinator and coding
-    # worktrees can see the type stubs in REPO_ROOT/games/{game}/src/types/.
-    # -------------------------------------------------------------------------
-    log.info("=== Build Tier -- Phase 1a: Merge DevEx -> master ===")
-    if not merge_devex_branch(run_log_dir):
-        log.error("devex merge failed -- cannot proceed to coordinator")
-        raise SystemExit(1)
-    log.info("devex merge complete -- type stubs now visible on master")
+        # ---------------------------------------------------------------------
+        # Phase 1a: Merge DevEx branch into master so the Coordinator and coding
+        # worktrees can see the type stubs in REPO_ROOT/games/{game}/src/types/.
+        # ---------------------------------------------------------------------
+        log.info("=== Build Tier -- Phase 1a: Merge DevEx -> master ===")
+        if not merge_devex_branch(run_log_dir):
+            log.error("devex merge failed -- cannot proceed to coordinator")
+            raise SystemExit(1)
+        log.info("devex merge complete -- type stubs now visible on master")
 
     # -------------------------------------------------------------------------
     # Phase 1.5: Coordinator -- reads all design docs + type stubs (now on
     # master), writes docs/build-plans/<game>-coding-{1,2,3}.md.
     # Runs in the main repo. Key inputs are pre-loaded into its system prompt.
     # -------------------------------------------------------------------------
-    log.info("=== Build Tier -- Phase 1.5: Coordinator (build plans) ===")
-    coordinator_log = run_log_dir / f"{COORDINATOR_AGENT['name']}.log"
+    if start_after == "coordinator":
+        log.info("=== Build Tier -- Phase 1.5: Coordinator (SKIPPED via --start-after) ===")
+    else:
+        log.info("=== Build Tier -- Phase 1.5: Coordinator (build plans) ===")
+        coordinator_log = run_log_dir / f"{COORDINATOR_AGENT['name']}.log"
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        coordinator_result = await loop.run_in_executor(
-            executor, run_agent, COORDINATOR_AGENT, game, REPO_ROOT, coordinator_log
-        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            coordinator_result = await loop.run_in_executor(
+                executor, run_agent, COORDINATOR_AGENT, game, REPO_ROOT, coordinator_log
+            )
 
-    if coordinator_result != 0:
-        log.error("coordinator agent failed -- cannot proceed to coding phase", log=str(coordinator_log))
-        raise SystemExit(1)
-    log.info("coordinator complete -- build plans written to docs/build-plans/")
+        if coordinator_result != 0:
+            log.error("coordinator agent failed -- cannot proceed to coding phase", log=str(coordinator_log))
+            raise SystemExit(1)
+        log.info("coordinator complete -- build plans written to docs/build-plans/")
 
-    # -------------------------------------------------------------------------
-    # Phase 1b: Commit build plans to master so coding worktrees (branched from
-    # HEAD) will contain them at creation time.
-    # -------------------------------------------------------------------------
-    log.info("=== Build Tier -- Phase 1b: Commit build plans -> master ===")
-    if not commit_build_plans(game, run_log_dir):
-        log.error("build plan commit failed -- cannot proceed to coding phase")
-        raise SystemExit(1)
-    log.info("build plans committed -- coding worktrees will inherit them from HEAD")
+        # ---------------------------------------------------------------------
+        # Phase 1b: Commit build plans to master so coding worktrees (branched
+        # from HEAD) will contain them at creation time.
+        # ---------------------------------------------------------------------
+        log.info("=== Build Tier -- Phase 1b: Commit build plans -> master ===")
+        if not commit_build_plans(game, run_log_dir):
+            log.error("build plan commit failed -- cannot proceed to coding phase")
+            raise SystemExit(1)
+        log.info("build plans committed -- coding worktrees will inherit them from HEAD")
 
-    if stop_after == "coordinator":
-        log.info(
-            "Stopped after coordinator (--stop-after coordinator). "
-            "Inspect docs/build-plans/ then re-run without --stop-after to run coding agents."
-        )
-        return
+        if stop_after == "coordinator":
+            log.info(
+                "Stopped after coordinator (--stop-after coordinator). "
+                "Inspect docs/build-plans/ then re-run with --start-after coordinator to run coding agents."
+            )
+            return
 
     # -------------------------------------------------------------------------
     # Phase 2: coding-1/2/3 -- parallel, each owns a disjoint set of files.
@@ -1340,6 +1441,63 @@ def run_quality_tier(game: str, run_log_dir: Path):
     asyncio.run(_run_quality_tier_async(game, run_log_dir))
 
 
+def run_patch_tier(
+    game: str,
+    run_log_dir: Path,
+    fix: str | None,
+    fix_file: str | None,
+    then_quality: bool,
+):
+    """
+    Run the patch agent against an already-built game.
+
+    The fix description is assembled from --fix (inline string) and/or --fix-file
+    (path to a markdown file relative to REPO_ROOT). Both can be supplied together;
+    fix-file content comes first, then the inline --fix string.
+
+    If --then-quality is set, the full quality tier runs immediately after the patch
+    agent commits its changes.
+    """
+    # Build fix description from one or both sources.
+    parts: list[str] = []
+
+    if fix_file:
+        fix_file_path = REPO_ROOT / fix_file
+        if not fix_file_path.exists():
+            log.error("--fix-file not found", path=str(fix_file_path))
+            raise SystemExit(1)
+        parts.append(fix_file_path.read_text(encoding="utf-8").strip())
+        log.info("loaded fix description from file", path=fix_file)
+
+    if fix:
+        parts.append(fix.strip())
+
+    if not parts:
+        log.error("patch tier requires --fix or --fix-file (or both)")
+        raise SystemExit(1)
+
+    fix_description = "\n\n".join(parts)
+
+    # Inject the fix description as extra task context so the agent sees it
+    # at the top of its task section without modifying the prompt file.
+    extra_context = f"## Fix Description\n\n{fix_description}"
+
+    log.info("=== Patch Tier ===")
+    log.info("fix description", content=fix_description[:200] + ("..." if len(fix_description) > 200 else ""))
+
+    patch_log = run_log_dir / "patch.log"
+    result = run_agent(PATCH_AGENT, game, REPO_ROOT, patch_log, extra_task_context=extra_context)
+
+    if result != 0:
+        log.error("patch agent failed", log=str(patch_log))
+        raise SystemExit(1)
+    log.info("patch complete")
+
+    if then_quality:
+        log.info("--then-quality set: running quality tier after patch")
+        run_quality_tier(game, run_log_dir)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1349,7 +1507,7 @@ def run_quality_tier(game: str, run_log_dir: Path):
 @click.option(
     "--tier",
     default="all",
-    type=click.Choice(["all", "design", "build", "quality", "smoke", "clean"]),
+    type=click.Choice(["all", "design", "build", "quality", "patch", "smoke", "clean"]),
     help=(
         "Which tier to run (default: all). "
         "'smoke' verifies API + file I/O before a real run. "
@@ -1376,7 +1534,54 @@ def run_quality_tier(game: str, run_log_dir: Path):
         "'coordinator' stops after Phase 1.5 (inspect docs/build-plans/)."
     ),
 )
-def main(game: str, tier: str, stop_after: str | None, clean: bool):
+@click.option(
+    "--start-after",
+    default=None,
+    type=click.Choice(["devex", "coordinator"]),
+    help=(
+        "Resume the build tier, skipping phases already completed. "
+        "'devex' skips Phase 1/1a and resumes from the coordinator. "
+        "'coordinator' skips Phases 1/1a/1.5/1b and resumes from the coding agents."
+    ),
+)
+@click.option(
+    "--fix",
+    default=None,
+    help=(
+        "Inline fix description for the patch tier. "
+        "Use for quick one-liners (e.g. --fix 'score display freezes after chain reaction'). "
+        "Can be combined with --fix-file; --fix-file content comes first."
+    ),
+)
+@click.option(
+    "--fix-file",
+    default=None,
+    help=(
+        "Path to a markdown file (relative to repo root) containing a detailed fix description. "
+        "Use for multi-step fixes, reproduction steps, or fixes with supporting context. "
+        "Can be combined with --fix; file content comes first. "
+        "Example: --fix-file docs/fixes/score-bug.md"
+    ),
+)
+@click.option(
+    "--then-quality",
+    is_flag=True,
+    default=False,
+    help=(
+        "After the patch tier completes, automatically run the full quality tier. "
+        "Has no effect unless --tier is 'patch'."
+    ),
+)
+def main(
+    game: str,
+    tier: str,
+    stop_after: str | None,
+    start_after: str | None,
+    clean: bool,
+    fix: str | None,
+    fix_file: str | None,
+    then_quality: bool,
+):
     """Arcade Swarm supervisor -- orchestrates Claude agent swarm via Anthropic SDK."""
     LOGS_DIR.mkdir(exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
@@ -1422,10 +1627,13 @@ def main(game: str, tier: str, stop_after: str | None, clean: bool):
         if clean:
             log.info("--clean flag set: wiping build worktrees and branches before building")
             clean_build_state()
-        asyncio.run(run_build_tier_async(game, run_log_dir, stop_after=stop_after))
+        asyncio.run(run_build_tier_async(game, run_log_dir, stop_after=stop_after, start_after=start_after))
 
     if tier in ("all", "quality"):
         run_quality_tier(game, run_log_dir)
+
+    if tier == "patch":
+        run_patch_tier(game, run_log_dir, fix=fix, fix_file=fix_file, then_quality=then_quality)
 
     log.info("supervisor complete", game=game, tier=tier)
 
