@@ -1,3 +1,4 @@
-// @arcade-swarm/math-engine — stub entry point
-// Implementation will be provided by coding agent 3.
-export {};
+// @arcade-swarm/math-engine — re-export from TypeScript source
+// Vite/bundler will resolve the .ts files directly.
+export { MathEngineCore } from './src/MathEngineCore';
+export { } from './src/types';
