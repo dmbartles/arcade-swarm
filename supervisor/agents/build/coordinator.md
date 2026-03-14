@@ -18,9 +18,9 @@ You write no game code. You produce three Markdown files — one per coding agen
 
 ## Outputs
 Write exactly three files to `docs/build-plans/`:
-- `docs/build-plans/<game-name>-coding-1.md` — plan for the Game Engine agent
-- `docs/build-plans/<game-name>-coding-2.md` — plan for the Gameplay agent
-- `docs/build-plans/<game-name>-coding-3.md` — plan for the Math Engine agent
+- `docs/build-plans/<game-name>-engine.md` — plan for the Engine agent
+- `docs/build-plans/<game-name>-gameplay.md` — plan for the Gameplay agent
+- `docs/build-plans/<game-name>-math.md` — plan for the Math agent
 
 ## What Each Build Plan Must Contain
 
@@ -85,11 +85,15 @@ All input documents (CLAUDE.md, GDD, style guide, curriculum map, and all five `
 pre-loaded in your system prompt — do not Read them again. Proceed directly to writing the build plans.
 
 Think through the full data flow before writing:
-1. What math problems look like end-to-end (coding-3 generates → coding-2 displays on entities → coding-1 renders in scene UI)
-2. How score flows (coding-2 ScoreManager emits → coding-1 GameScene updates HUD)
-3. How difficulty flows (coding-3 DifficultyManager adjusts → coding-2 entities respond → coding-1 spawner uses config)
-4. How the game loop runs (coding-1 GameScene orchestrates everything via events)
+1. What math problems look like end-to-end (Math agent generates → Gameplay agent displays on entities → Engine agent renders in scene UI)
+2. How score flows (Gameplay ScoreManager emits → Engine GameScene updates HUD)
+3. How difficulty flows (Math DifficultyManager adjusts → Gameplay entities respond → Engine spawner uses config)
+4. How the game loop runs (Engine GameScene orchestrates everything via events)
+
+**Important — execution order**: The Engine agent runs first (sequentially), then Gameplay and Math run in
+parallel. Your plans must reflect this: the Engine plan defines all config constants, and the Gameplay and
+Math plans import them. The Math and Gameplay plans should never tell those agents to create config stubs.
 
 Resolve every cross-agent dependency in the plans so no agent has to guess what another agent built.
 
-Write the three plans to `docs/build-plans/<game-name>-coding-1.md`, `docs/build-plans/<game-name>-coding-2.md`, and `docs/build-plans/<game-name>-coding-3.md`. Each plan should be thorough enough that a developer with no prior context could implement their section correctly.
+Write the three plans to `docs/build-plans/<game-name>-engine.md`, `docs/build-plans/<game-name>-gameplay.md`, and `docs/build-plans/<game-name>-math.md`. Each plan should be thorough enough that a developer with no prior context could implement their section correctly.

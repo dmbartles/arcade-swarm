@@ -13,26 +13,27 @@ Agent tiers (in order):
        curriculum    → produces docs/curriculum-maps/<game>.md
 
   2. Build tier   — five phases:
-       Phase 1:   DevEx         — scaffolds build tooling (package.json, vite, tsconfig,
-                                  index.html) + writes src/types/ interface stubs.
-                                  Runs in its own worktree (feature/build-pipeline).
-       Phase 1a:  DevEx merge   — merges feature/build-pipeline → master so the Coordinator
-                                  and coding agents can see the type stubs.
-       Phase 1.5: Coordinator   — reads all design docs + src/types/ stubs; writes
-                                  concrete build plans to docs/build-plans/ for each
-                                  coding agent. Runs in the main repo (no worktree).
-       Phase 1b:  Plan commit   — commits build plans to master so coding worktrees
-                                  contain them on creation.
-       Phase 2:   coding-1/2/3  — run in parallel, each in its own worktree on a
-                                  disjoint set of files. Each reads its build plan from
-                                  docs/build-plans/ before writing any code.
-                                    coding-1 (feature/game-engine)        → scenes, config, main.ts
-                                    coding-2 (feature/gameplay-mechanics)  → entities, ScoreManager
-                                    coding-3 (feature/math-engine)        → shared/math-engine,
-                                                                             MathEngine, DifficultyManager
-       Phase 3:   Merge         — merges coding-1/2/3 branches into master in dependency
-                                  order (devex was already merged in Phase 1a);
-                                  cleans up all worktrees.
+       Phase 1:   DevEx        — scaffolds build tooling (package.json, vite, tsconfig,
+                                 index.html) + writes src/types/ interface stubs.
+                                 Runs in its own worktree (feature/build-pipeline).
+                                 [Auto-merges feature/build-pipeline → master on completion.]
+       Phase 2:   Coordinator  — reads all design docs + src/types/ stubs; writes
+                                 concrete build plans to docs/build-plans/ for each
+                                 coding agent. Runs in the main repo (no worktree).
+                                 [Auto-commits build plans to master on completion.]
+       Phase 3:   Engine       — runs sequentially (first); writes scenes, config, main.ts.
+                                 Other agents import its config constants — it must finish first.
+                                 Worktree: feature/game-engine.
+                                 [Auto-merges feature/game-engine → master on completion.]
+       Phase 4:   Gameplay+Math — run in parallel after Engine merges; each owns disjoint files.
+                                   engine   (feature/game-engine)        → scenes, config, main.ts
+                                   gameplay (feature/gameplay-mechanics)  → entities, ScoreManager
+                                   math     (feature/math-engine)        → shared/math-engine,
+                                                                            MathEngine, DifficultyManager
+                                 [Merges gameplay + math branches → master; cleans up all worktrees.]
+       Phase 5:   Integration  — runs in main repo after merge; fixes cross-agent wiring
+                                 errors (constructor mismatches, import paths, payload shapes)
+                                 until typecheck + lint pass clean.
 
   3. Quality tier — parallel; reviews the combined merged output
        architecture  → docs/reviews/architecture.md
@@ -59,9 +60,11 @@ Usage:
     python main.py --game missile-command-math --tier design
     python main.py --game missile-command-math --tier build
     python main.py --game missile-command-math --tier build --stop-after devex        <- stop after Phase 1; inspect games/missile-command-math/src/types/
-    python main.py --game missile-command-math --tier build --stop-after coordinator  <- stop after Phase 1.5; inspect docs/build-plans/
-    python main.py --game missile-command-math --tier build --start-after devex       <- skip Phase 1; resume from coordinator
-    python main.py --game missile-command-math --tier build --start-after coordinator <- skip Phases 1/1a/1.5/1b; resume from coding agents
+    python main.py --game missile-command-math --tier build --start-after devex       <- skip Phase 1; resume from coordinator (Phase 2)
+    python main.py --game missile-command-math --tier build --stop-after coordinator  <- stop after Phase 2; inspect docs/build-plans/
+    python main.py --game missile-command-math --tier build --start-after coordinator <- skip Phases 1-2; resume from engine (Phase 3)
+    python main.py --game missile-command-math --tier build --stop-after engine       <- stop after Phase 3; inspect engine output before parallel agents
+    python main.py --game missile-command-math --tier build --start-after engine      <- skip Phases 1-3; resume from gameplay+math (Phase 4)
     python main.py --game missile-command-math --tier build --clean   <- wipe worktrees + branches before building
     python main.py --game missile-command-math --tier clean            <- wipe worktrees + branches only (no build)
     python main.py --game missile-command-math --tier quality
@@ -88,6 +91,7 @@ import logging
 import glob as glob_module
 import datetime
 import os
+import platform
 import json
 import re as _re
 import time
@@ -542,83 +546,105 @@ COORDINATOR_AGENT = {
     ],
 }
 
-# Phase 2 -- coding-1/2/3: parallel, each owns a disjoint set of files.
-# By the time these run, master contains: type stubs (from Phase 1a merge) +
-# build plans (from Phase 1b commit) -- so both are visible in every worktree.
-CODING_AGENTS = [
-    {
-        "name": "coding-1",
-        "prompt": "agents/build/coding-1.md",
-        "worktree": "../agent-1-engine",
-        "branch": "feature/game-engine",
-        "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
-        "model": BUILD_MODEL,
-        "max_tokens": BUILD_MAX_TOKENS,
-        "preload": [
-            "CLAUDE.md",
-            "docs/gdds/{game}.md",
-            "docs/style-guides/{game}.md",
-            "docs/build-plans/{game}-coding-1.md",
-            # Type stubs -- pre-loaded so the agent knows exact exports before writing imports,
-            # avoiding typecheck failures caused by importing from the wrong source file.
-            "games/{game}/src/types/GameEvents.ts",
-            "games/{game}/src/types/IMathProblem.ts",
-            "games/{game}/src/types/IMathEngine.ts",
-            "games/{game}/src/types/IScoreManager.ts",
-            "games/{game}/src/types/IDifficultyConfig.ts",
-            "games/{game}/src/types/index.ts",
-        ],
-    },
-    {
-        "name": "coding-2",
-        "prompt": "agents/build/coding-2.md",
-        "worktree": "../agent-2-gameplay",
-        "branch": "feature/gameplay-mechanics",
-        "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
-        "model": BUILD_MODEL,
-        "max_tokens": BUILD_MAX_TOKENS,
-        "preload": [
-            "CLAUDE.md",
-            "docs/gdds/{game}.md",
-            "docs/style-guides/{game}.md",
-            "docs/build-plans/{game}-coding-2.md",
-            # Type stubs -- pre-loaded so the agent knows exact exports before writing imports.
-            "games/{game}/src/types/GameEvents.ts",
-            "games/{game}/src/types/IMathProblem.ts",
-            "games/{game}/src/types/IMathEngine.ts",
-            "games/{game}/src/types/IScoreManager.ts",
-            "games/{game}/src/types/IDifficultyConfig.ts",
-            "games/{game}/src/types/index.ts",
-        ],
-    },
-    {
-        "name": "coding-3",
-        "prompt": "agents/build/coding-3.md",
-        "worktree": "../agent-3-math",
-        "branch": "feature/math-engine",
-        "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
-        "model": BUILD_MODEL,
-        "max_tokens": BUILD_MAX_TOKENS,
-        "preload": [
-            "CLAUDE.md",
-            "docs/gdds/{game}.md",
-            "docs/style-guides/{game}.md",
-            "docs/curriculum-maps/{game}.md",
-            "docs/build-plans/{game}-coding-3.md",
-            # Type stubs -- pre-loaded so the agent knows exact exports before writing imports.
-            "games/{game}/src/types/GameEvents.ts",
-            "games/{game}/src/types/IMathProblem.ts",
-            "games/{game}/src/types/IMathEngine.ts",
-            "games/{game}/src/types/IScoreManager.ts",
-            "games/{game}/src/types/IDifficultyConfig.ts",
-            "games/{game}/src/types/index.ts",
-        ],
-    },
-]
+# Phase 3 -- engine: runs sequentially before gameplay/math.
+# Its config constants are imported by the gameplay and math agents.
+ENGINE_AGENT = {
+    "name": "engine",
+    "prompt": "agents/build/engine.md",
+    "worktree": "../agent-engine",
+    "branch": "feature/game-engine",
+    "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+    "model": BUILD_MODEL,
+    "max_tokens": BUILD_MAX_TOKENS,
+    "preload": [
+        "CLAUDE.md",
+        "docs/gdds/{game}.md",
+        "docs/style-guides/{game}.md",
+        "docs/build-plans/{game}-engine.md",
+        # Type stubs -- pre-loaded so the agent knows exact exports before writing imports,
+        # avoiding typecheck failures caused by importing from the wrong source file.
+        "games/{game}/src/types/GameEvents.ts",
+        "games/{game}/src/types/IMathProblem.ts",
+        "games/{game}/src/types/IMathEngine.ts",
+        "games/{game}/src/types/IScoreManager.ts",
+        "games/{game}/src/types/IDifficultyConfig.ts",
+        "games/{game}/src/types/index.ts",
+    ],
+}
+
+# Phase 4 -- gameplay and math: run in parallel after engine merges into master.
+# By the time these run, master contains: type stubs + build plans + engine code (config, scenes).
+GAMEPLAY_AGENT = {
+    "name": "gameplay",
+    "prompt": "agents/build/gameplay.md",
+    "worktree": "../agent-gameplay",
+    "branch": "feature/gameplay-mechanics",
+    "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+    "model": BUILD_MODEL,
+    "max_tokens": BUILD_MAX_TOKENS,
+    "preload": [
+        "CLAUDE.md",
+        "docs/gdds/{game}.md",
+        "docs/style-guides/{game}.md",
+        "docs/build-plans/{game}-gameplay.md",
+        # Type stubs -- pre-loaded so the agent knows exact exports before writing imports.
+        "games/{game}/src/types/GameEvents.ts",
+        "games/{game}/src/types/IMathProblem.ts",
+        "games/{game}/src/types/IMathEngine.ts",
+        "games/{game}/src/types/IScoreManager.ts",
+        "games/{game}/src/types/IDifficultyConfig.ts",
+        "games/{game}/src/types/index.ts",
+    ],
+}
+
+MATH_AGENT = {
+    "name": "math",
+    "prompt": "agents/build/math.md",
+    "worktree": "../agent-math",
+    "branch": "feature/math-engine",
+    "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+    "model": BUILD_MODEL,
+    "max_tokens": BUILD_MAX_TOKENS,
+    "preload": [
+        "CLAUDE.md",
+        "docs/gdds/{game}.md",
+        "docs/style-guides/{game}.md",
+        "docs/curriculum-maps/{game}.md",
+        "docs/build-plans/{game}-math.md",
+        # Type stubs -- pre-loaded so the agent knows exact exports before writing imports.
+        "games/{game}/src/types/GameEvents.ts",
+        "games/{game}/src/types/IMathProblem.ts",
+        "games/{game}/src/types/IMathEngine.ts",
+        "games/{game}/src/types/IScoreManager.ts",
+        "games/{game}/src/types/IDifficultyConfig.ts",
+        "games/{game}/src/types/index.ts",
+    ],
+}
+
+# Convenience list of all worktree-based coding agents (used by BUILD_AGENTS / clean)
+CODING_AGENTS = [ENGINE_AGENT, GAMEPLAY_AGENT, MATH_AGENT]
+
+# Parallel coding agents (Phase 4 -- run after engine merges)
+PARALLEL_CODING_AGENTS = [GAMEPLAY_AGENT, MATH_AGENT]
+
+# Phase 5 -- integration: runs in main repo after all branches are merged.
+# Fixes cross-agent wiring errors (constructor mismatches, import paths, payload shapes)
+# until typecheck and lint pass clean. No worktree -- operates on master directly.
+INTEGRATION_AGENT = {
+    "name": "integration",
+    "prompt": "agents/build/integration.md",
+    "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+    "model": BUILD_MODEL,
+    "max_tokens": BUILD_MAX_TOKENS,
+    "preload": [
+        "CLAUDE.md",
+        "docs/gdds/{game}.md",
+    ],
+}
 
 SMOKE_AGENT = {
     "name": "smoke",
-    "prompt": "agents/smoke.md",
+    "prompt": "agents/utilities/smoke.md",
     "tools": ["Read", "Write"],
     "model": SMOKE_MODEL,
     "max_tokens": SMOKE_MAX_TOKENS,
@@ -691,8 +717,8 @@ PATCH_AGENT = {
 # All agents that use worktrees (used by clean / worktree management)
 BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
 
-# Phase 3 merges only the coding branches -- DevEx is already merged after Phase 1a.
-_PHASE3_MERGE_AGENTS = CODING_AGENTS
+# Phase 4 merge: only gameplay + math. Engine was already merged after Phase 3.
+_PHASE4_MERGE_AGENTS = PARALLEL_CODING_AGENTS
 
 
 # ---------------------------------------------------------------------------
@@ -782,8 +808,19 @@ def run_agent(
     if extra_task_context:
         task_body = extra_task_context.strip() + "\n\n" + task_body
 
+    os_name = platform.system()  # "Windows", "Darwin", or "Linux"
+    os_notice = (
+        f"**Host OS: {os_name}** — "
+        + ("shell is `cmd.exe` (no `grep`, `ls`, `head`, `tail`, or `2>/dev/null`); "
+           "use the `Grep` and `Glob` tools instead of Bash for file searches."
+           if os_name == "Windows"
+           else "standard Unix shell available.")
+        + "\n\n"
+    )
+
     user_message = (
         f"Game name: {game}\n\n"
+        + os_notice
         + preload_notice
         + f"## Your Task\n{task_body}"
     )
@@ -1109,9 +1146,9 @@ def commit_build_plans(game: str, run_log_dir: Path) -> bool:
     log.info("committing coordinator build plans to master", game=game)
 
     plan_files = [
-        f"docs/build-plans/{game}-coding-1.md",
-        f"docs/build-plans/{game}-coding-2.md",
-        f"docs/build-plans/{game}-coding-3.md",
+        f"docs/build-plans/{game}-engine.md",
+        f"docs/build-plans/{game}-gameplay.md",
+        f"docs/build-plans/{game}-math.md",
     ]
 
     with open(commit_log, "w", encoding="utf-8") as f:
@@ -1163,12 +1200,54 @@ def commit_build_plans(game: str, run_log_dir: Path) -> bool:
         return True
 
 
+def merge_engine_branch(run_log_dir: Path) -> bool:
+    """
+    Phase 3 completion: merge feature/game-engine into master after the engine agent finishes.
+
+    This makes the engine's config constants visible in master so gameplay and math
+    worktrees (branched from HEAD) will contain them at creation time.
+    Returns True on success, False on failure.
+    """
+    branch = ENGINE_AGENT["branch"]
+    merge_log = run_log_dir / "merge-engine.log"
+    log.info("merging engine branch into master", branch=branch)
+
+    with open(merge_log, "w", encoding="utf-8") as f:
+        f.write(f"=== Phase 3 merge: {branch} -> master | {_ts()} ===\n\n")
+
+        result = subprocess.run(
+            ["git", "merge", "--no-ff", branch, "-m",
+             f"chore: merge {branch} (engine scenes + config)"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout:
+            f.write(result.stdout)
+        if result.stderr:
+            f.write(f"STDERR: {result.stderr}\n")
+
+        if result.returncode != 0:
+            if "already up to date" in (result.stdout + result.stderr).lower():
+                f.write(f"[{_ts()}] Already up to date -- nothing new to merge\n")
+                log.info("engine branch already up to date", branch=branch)
+                return True
+            f.write(f"[{_ts()}] X MERGE FAILED for {branch}\n")
+            log.error("engine merge failed", branch=branch, merge_log=str(merge_log))
+            return False
+
+        f.write(f"[{_ts()}] + Merged {branch} into master\n")
+        log.info("engine branch merged into master", branch=branch)
+        return True
+
+
 def merge_build_branches(run_log_dir: Path) -> bool:
     """
-    Phase 3: merge coding-1/2/3 branches into master in dependency order.
+    Phase 4 completion: merge gameplay + math branches into master.
 
-    DevEx (feature/build-pipeline) was already merged in Phase 1a and is
-    intentionally excluded here. Merge order: coding-1 -> coding-2 -> coding-3.
+    Engine (feature/game-engine) was already merged after Phase 3 and is excluded here.
+    DevEx (feature/build-pipeline) was already merged after Phase 1 and is excluded here.
+    Merge order: gameplay -> math.
     On conflict, stops immediately and prints resolution instructions.
     On success, removes all remaining build worktrees.
     Returns True on success, False on conflict.
@@ -1181,10 +1260,10 @@ def merge_build_branches(run_log_dir: Path) -> bool:
             f.write(line)
             f.flush()
 
-        write(f"=== Phase 3: Build Branch Merge | {_ts()} ===\n\n")
-        write("Merging coding branches (DevEx already merged in Phase 1a).\n\n")
+        write(f"=== Phase 4 merge: gameplay + math branches | {_ts()} ===\n\n")
+        write("Merging gameplay and math branches (DevEx and Engine already merged).\n\n")
 
-        for agent in _PHASE3_MERGE_AGENTS:
+        for agent in _PHASE4_MERGE_AGENTS:
             branch = agent["branch"]
             write(f"[{_ts()}] Merging {branch}...\n")
             log.info("merging branch", branch=branch)
@@ -1275,21 +1354,23 @@ async def run_build_tier_async(
     Run the build tier across five phases.
 
     stop_after  -- stop after the named phase for inspection before continuing:
-      "devex"       -- run Phase 1 only; inspect src/types/ before continuing
-      "coordinator" -- run Phases 1–1b only; inspect docs/build-plans/ before coding
+      "devex"       -- stop after Phase 1; inspect src/types/
+      "coordinator" -- stop after Phase 2; inspect docs/build-plans/
+      "engine"      -- stop after Phase 3; inspect engine output before parallel agents
 
     start_after -- skip phases up to and including the named phase (resume mode):
-      "devex"       -- skip Phase 1/1a; assume feature/build-pipeline already merged;
-                       resume from Phase 1.5 (coordinator)
-      "coordinator" -- skip Phases 1/1a/1.5/1b; assume build plans already committed;
-                       resume from Phase 2 (coding agents)
+      "devex"       -- skip Phase 1; assume feature/build-pipeline already merged;
+                       resume from Phase 2 (coordinator)
+      "coordinator" -- skip Phases 1-2; assume build plans committed; resume from Phase 3 (engine)
+      "engine"      -- skip Phases 1-3; assume engine branch merged; resume from Phase 4 (gameplay+math)
     """
     loop = asyncio.get_event_loop()
 
     # -------------------------------------------------------------------------
     # Phase 1: DevEx -- scaffold build tooling and src/types/ interface stubs.
+    # Auto-merges feature/build-pipeline -> master on completion.
     # -------------------------------------------------------------------------
-    if start_after in ("devex", "coordinator"):
+    if start_after in ("devex", "coordinator", "engine"):
         log.info("=== Build Tier -- Phase 1: DevEx (SKIPPED via --start-after) ===")
     else:
         log.info("=== Build Tier -- Phase 1: DevEx (tooling + interfaces) ===")
@@ -1304,34 +1385,29 @@ async def run_build_tier_async(
         if devex_result != 0:
             log.error("devex agent failed -- cannot proceed", log=str(devex_log))
             raise SystemExit(1)
-        log.info("devex complete")
+        log.info("devex complete -- merging into master")
 
-        if stop_after == "devex":
-            log.info(
-                "Stopped after devex (--stop-after devex). "
-                f"Inspect worktree at {devex_worktree} then re-run with --start-after devex or --stop-after coordinator."
-            )
-            return
-
-        # ---------------------------------------------------------------------
-        # Phase 1a: Merge DevEx branch into master so the Coordinator and coding
-        # worktrees can see the type stubs in REPO_ROOT/games/{game}/src/types/.
-        # ---------------------------------------------------------------------
-        log.info("=== Build Tier -- Phase 1a: Merge DevEx -> master ===")
         if not merge_devex_branch(run_log_dir):
             log.error("devex merge failed -- cannot proceed to coordinator")
             raise SystemExit(1)
-        log.info("devex merge complete -- type stubs now visible on master")
+        log.info("devex merged -- type stubs now visible on master")
+
+        if stop_after == "devex":
+            log.info(
+                "Stopped after Phase 1: DevEx (--stop-after devex). "
+                f"Inspect worktree at {devex_worktree} then re-run with --start-after devex."
+            )
+            return
 
     # -------------------------------------------------------------------------
-    # Phase 1.5: Coordinator -- reads all design docs + type stubs (now on
-    # master), writes docs/build-plans/<game>-coding-{1,2,3}.md.
-    # Runs in the main repo. Key inputs are pre-loaded into its system prompt.
+    # Phase 2: Coordinator -- reads all design docs + type stubs (now on master),
+    # writes docs/build-plans/<game>-engine/gameplay/math.md.
+    # Auto-commits build plans to master on completion.
     # -------------------------------------------------------------------------
-    if start_after == "coordinator":
-        log.info("=== Build Tier -- Phase 1.5: Coordinator (SKIPPED via --start-after) ===")
+    if start_after in ("coordinator", "engine"):
+        log.info("=== Build Tier -- Phase 2: Coordinator (SKIPPED via --start-after) ===")
     else:
-        log.info("=== Build Tier -- Phase 1.5: Coordinator (build plans) ===")
+        log.info("=== Build Tier -- Phase 2: Coordinator (build plans) ===")
         coordinator_log = run_log_dir / f"{COORDINATOR_AGENT['name']}.log"
 
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -1340,59 +1416,94 @@ async def run_build_tier_async(
             )
 
         if coordinator_result != 0:
-            log.error("coordinator agent failed -- cannot proceed to coding phase", log=str(coordinator_log))
+            log.error("coordinator agent failed -- cannot proceed to engine phase", log=str(coordinator_log))
             raise SystemExit(1)
-        log.info("coordinator complete -- build plans written to docs/build-plans/")
+        log.info("coordinator complete -- committing build plans to master")
 
-        # ---------------------------------------------------------------------
-        # Phase 1b: Commit build plans to master so coding worktrees (branched
-        # from HEAD) will contain them at creation time.
-        # ---------------------------------------------------------------------
-        log.info("=== Build Tier -- Phase 1b: Commit build plans -> master ===")
         if not commit_build_plans(game, run_log_dir):
-            log.error("build plan commit failed -- cannot proceed to coding phase")
+            log.error("build plan commit failed -- cannot proceed to engine phase")
             raise SystemExit(1)
-        log.info("build plans committed -- coding worktrees will inherit them from HEAD")
+        log.info("build plans committed -- engine worktree will inherit them from HEAD")
 
         if stop_after == "coordinator":
             log.info(
-                "Stopped after coordinator (--stop-after coordinator). "
-                "Inspect docs/build-plans/ then re-run with --start-after coordinator to run coding agents."
+                "Stopped after Phase 2: Coordinator (--stop-after coordinator). "
+                "Inspect docs/build-plans/ then re-run with --start-after coordinator."
             )
             return
 
     # -------------------------------------------------------------------------
-    # Phase 2: coding-1/2/3 -- parallel, each owns a disjoint set of files.
-    # Worktrees branch from updated master (which now has type stubs + build plans).
-    # Key docs are pre-loaded into each agent's system prompt.
+    # Phase 3: Engine -- runs sequentially first.
+    # Its config constants are imported by the gameplay and math agents.
+    # Auto-merges feature/game-engine -> master on completion.
     # -------------------------------------------------------------------------
-    log.info("=== Build Tier -- Phase 2: Coding Agents (parallel) ===")
-    with ThreadPoolExecutor(max_workers=len(CODING_AGENTS)) as executor:
+    if start_after == "engine":
+        log.info("=== Build Tier -- Phase 3: Engine (SKIPPED via --start-after) ===")
+    else:
+        log.info("=== Build Tier -- Phase 3: Engine (scenes + config, sequential) ===")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            engine_result = await run_build_agent_async(ENGINE_AGENT, game, run_log_dir, executor)
+
+        if isinstance(engine_result, Exception) or engine_result != 0:
+            log.error("engine agent failed -- cannot proceed to parallel agents", result=str(engine_result))
+            raise SystemExit(1)
+        log.info("engine complete -- merging into master so gameplay/math can see config")
+
+        if not merge_engine_branch(run_log_dir):
+            log.error("engine merge failed -- cannot proceed to parallel agents")
+            raise SystemExit(1)
+        log.info("engine merged -- config constants now visible on master")
+
+        if stop_after == "engine":
+            log.info(
+                "Stopped after Phase 3: Engine (--stop-after engine). "
+                "Inspect engine output then re-run with --start-after engine."
+            )
+            return
+
+    # -------------------------------------------------------------------------
+    # Phase 4: Gameplay + Math -- parallel, each owns a disjoint set of files.
+    # Worktrees branch from updated master (type stubs + build plans + engine code).
+    # Merges gameplay + math into master; cleans up all worktrees.
+    # -------------------------------------------------------------------------
+    log.info("=== Build Tier -- Phase 4: Gameplay + Math (parallel) ===")
+    with ThreadPoolExecutor(max_workers=len(PARALLEL_CODING_AGENTS)) as executor:
         tasks = [
             run_build_agent_async(agent, game, run_log_dir, executor)
-            for agent in CODING_AGENTS
+            for agent in PARALLEL_CODING_AGENTS
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for agent, result in zip(CODING_AGENTS, results):
+    for agent, result in zip(PARALLEL_CODING_AGENTS, results):
         if isinstance(result, Exception) or result != 0:
             log.error("coding agent failed", name=agent["name"], result=str(result))
             raise SystemExit(1)
-    log.info("all coding agents complete")
+    log.info("gameplay and math agents complete -- merging branches")
 
-    # -------------------------------------------------------------------------
-    # Phase 3: Merge coding-1/2/3 into master; clean up all worktrees.
-    # DevEx was already merged in Phase 1a -- it is excluded here.
-    # -------------------------------------------------------------------------
-    log.info("=== Build Tier -- Phase 3: Merge coding branches ===")
     if not merge_build_branches(run_log_dir):
         raise SystemExit(1)
+    log.info("all branches merged -- proceeding to integration")
+
+    # -------------------------------------------------------------------------
+    # Phase 5: Integration -- runs in main repo after merge.
+    # Fixes cross-agent wiring errors until typecheck + lint pass clean.
+    # -------------------------------------------------------------------------
+    log.info("=== Build Tier -- Phase 5: Integration (cross-agent wiring fixes) ===")
+    integration_log = run_log_dir / f"{INTEGRATION_AGENT['name']}.log"
+    integration_result = run_agent(INTEGRATION_AGENT, game, REPO_ROOT, integration_log)
+    if integration_result != 0:
+        log.warning(
+            "integration agent did not complete cleanly -- manual review may be needed",
+            log=str(integration_log),
+        )
+    else:
+        log.info("integration complete -- codebase compiles cleanly")
     log.info("build tier complete")
 
 
 def run_smoke_test(game: str, run_log_dir: Path):
     """
-    Run the smoke test agent: reads CLAUDE.md + brief, writes docs/smoke-test.md,
+    Run the smoke test agent: reads CLAUDE.md + brief, writes docs/utilities/smoke-test.md,
     reads it back. Verifies API connectivity + Read/Write tool execution in ~2 turns.
     """
     log.info("=== Smoke Test ===")
@@ -1527,21 +1638,23 @@ def run_patch_tier(
 @click.option(
     "--stop-after",
     default=None,
-    type=click.Choice(["devex", "coordinator"]),
+    type=click.Choice(["devex", "coordinator", "engine"]),
     help=(
         "Stop the build tier after the named phase for inspection. "
         "'devex' stops after Phase 1 (inspect src/types/). "
-        "'coordinator' stops after Phase 1.5 (inspect docs/build-plans/)."
+        "'coordinator' stops after Phase 2 (inspect docs/build-plans/). "
+        "'engine' stops after Phase 3 (inspect engine output before parallel agents)."
     ),
 )
 @click.option(
     "--start-after",
     default=None,
-    type=click.Choice(["devex", "coordinator"]),
+    type=click.Choice(["devex", "coordinator", "engine"]),
     help=(
         "Resume the build tier, skipping phases already completed. "
-        "'devex' skips Phase 1/1a and resumes from the coordinator. "
-        "'coordinator' skips Phases 1/1a/1.5/1b and resumes from the coding agents."
+        "'devex' skips Phase 1 and resumes from Phase 2 (coordinator). "
+        "'coordinator' skips Phases 1-2 and resumes from Phase 3 (engine). "
+        "'engine' skips Phases 1-3 and resumes from Phase 4 (gameplay + math)."
     ),
 )
 @click.option(
