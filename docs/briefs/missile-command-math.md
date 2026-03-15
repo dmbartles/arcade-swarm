@@ -4,6 +4,54 @@
 > *"The only winning move is to solve the problem."*
 > — Inspired by *WarGames* (1983)
 
+---
+
+## VISUAL REFERENCES
+
+Reference images for this game live in `docs/references/missile-command-math/`. Drop images there and describe them in `manifest.md` before running the design tier. The art direction agent and asset creation agent will see the images directly — they do not invent the visual style from scratch.
+
+**Images to provide before the next build:**
+
+| What to provide | Why it matters |
+|----------------|----------------|
+| Screenshot of original Atari Missile Command (1980) | Sets background color, launcher color, missile proportions, city silhouette scale |
+| Playfield layout sketch (hand-drawn is fine) | Locks city positions, launcher placement, queue strip position — agents will not move these |
+| Explosion color palette reference | Locks the pastel lavender/mint/gold palette — prevents agents from defaulting to orange fire |
+| City skyline silhouette style reference | Shows the level of pixel detail expected — simple rectangular buildings or more detailed |
+| HUD/score display reference | Shows the font weight, glow, and density you want for the score bar |
+
+---
+
+## VISUAL DIRECTION
+
+### The Look
+Dark arcade cabinet aesthetic. Near-black background (`#0A0A0F`). Every element is crisp pixel art on a dark field — no gradients, no glow effects on backgrounds, no rounded corners anywhere.
+
+The **launcher** is the visual anchor of the screen: phosphor green (`#00FF88`) on black, like a cold war radar terminal. It should feel like a glowing instrument panel.
+
+**Missiles** are thin, angular, threatening. They are NOT thick shapes or filled rectangles. Think the original Missile Command: a slender cone or angular line descending with a small flame tail. The math problem floats on the body in white pixel font, large enough to read at a glance.
+
+**Explosions** are the reward moment — they must feel satisfying and unusual. The palette is deliberately pastel: lavender outer ring, warm gold middle ring, white core flash. NOT orange fire. NOT red. These are defense interceptors, not napalm.
+
+**Cities** are pixel-art skyline silhouettes, gold-lit when alive, dark grey when destroyed. Each should have one recognizable feature (the Space Needle spike, the Capitol dome outline, the Empire State taper) visible at 64px wide. Simple is better than detailed at this size.
+
+### NOT Like This
+
+| Avoid | Why |
+|-------|-----|
+| Neon cyberpunk colors (electric blue, hot pink, bright purple on dark) | Wrong decade. This is Cold War 1983, not a nightclub. |
+| Orange/red fire explosions | The brief explicitly calls for pastel lavender/mint/gold bursts. |
+| Thick, rounded missile shapes | They should look like ICBMs, not cartoon rockets. |
+| Gradient backgrounds or atmospheric fog | This is a flat pixel-art arcade game. One dark color for the sky. |
+| Drop shadows, glow halos, or blur effects on UI elements | Clean pixel edges only. |
+| Detailed, realistic city buildings | Simple silhouettes. Cities are 64px wide. One recognizable landmark per city is enough. |
+| Modern UI conventions (card shadows, rounded buttons, subtle greys) | Everything reads as retro CRT terminal. Sharp edges, phosphor green accents, pixel font. |
+
+### Atmosphere in One Sentence
+A Cold War radar terminal running an arcade game: the tension of real stakes, wrapped in enough pastel nostalgia to stay playful rather than frightening.
+
+---
+
 **Changelog from v1.0:**
 - Simplified from three launcher batteries to a **single launcher with an answer queue**
 - Added **paratroopers** as a new threat type alongside bombers and MIRVs

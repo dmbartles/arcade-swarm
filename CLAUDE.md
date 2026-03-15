@@ -53,7 +53,9 @@ python main.py
   - `audio/`, `visual/`, `analytics/` — Shared retro effects and local-only progress tracking
 - `supervisor/` — Python orchestration layer that spawns and coordinates Claude Code agent instances
 - `docs/briefs/` — Creative briefs from the Creative Director (source of truth for design intent)
+- `docs/references/<game-name>/` — **Visual reference images** dropped in by the Creative Director before build starts. The art direction agent reads these images directly and must anchor every major style decision to a file found here. See [Visual References](#visual-references) below for naming conventions.
 - `docs/gdds/`, `docs/style-guides/`, `docs/curriculum-maps/` — Agent-generated artifacts
+- `docs/build-plans/` — Per-agent build plans written by the Coordinator agent
 - `docs/reviews/` — Quality tier agent reports (architecture, security, QA, accessibility, performance)
 - `docs/adrs/` — Architecture Decision Records
 
@@ -65,13 +67,14 @@ This project is built by a swarm of Claude Code agents, all orchestrated by a Py
 
 **Design Tier** — Produce specifications, not code. Write only to `docs/`.
 - Game Design Agent: Reads creative briefs, produces Game Design Documents
-- Art Direction Agent: Produces visual style guides with exact hex codes, font specs, sprite dimensions
+- Art Direction Agent: Reads creative briefs + GDD + **visual reference images from `docs/references/<game>/`**; produces visual style guides with exact hex codes, font specs, sprite dimensions — every decision anchored to a reference
 - Curriculum Alignment Agent: Maps math content to Common Core standards by grade level
+- Asset Creation Agent: Reads style guide + references; writes `games/<game>/src/assets/SpriteFactory.ts` — procedurally draws every sprite in the style guide using HTML Canvas so build agents load real pixel art, not rectangles
 
 **Build Tier** — Write code. Each agent operates in its own git worktree.
-- Coding Agent 1: Game engine, rendering, scene management, visual effects
-- Coding Agent 2: Gameplay mechanics, entities, input handling, scoring
-- Coding Agent 3: Math engine, difficulty scaling, curriculum integration
+- Engine Agent: Game engine, rendering, scene management, visual effects — imports from SpriteFactory
+- Gameplay Agent: Gameplay mechanics, entities, input handling, scoring
+- Math Agent: Math engine, difficulty scaling, curriculum integration
 - DevEx Agent: Build pipeline, CI/CD, project configuration, tooling
 
 **Quality Tier** — Review and test. Produce reports to `docs/reviews/`. Do not modify source code unless explicitly noted.
@@ -83,6 +86,7 @@ This project is built by a swarm of Claude Code agents, all orchestrated by a Py
 
 #### Agent Tool Permissions
 - Design agents: `Read, Write, Edit` (read specs, write documents to `docs/` only)
+  - Exception: Asset Creation Agent gets `Read, Write, Edit` with write access to `games/<game>/src/assets/` only
 - Build agents: `Read, Write, Edit, Bash` (full development access within their worktree)
 - Quality agents: `Read, Grep, Glob` (read-only review, no code changes)
   - Exception: QA agent gets `Read, Write, Edit, Bash` (writes tests and runs them)
@@ -91,14 +95,17 @@ This project is built by a swarm of Claude Code agents, all orchestrated by a Py
 #### Agent Isolation Rules
 - Build agents work in separate git worktrees to prevent conflicts
 - Quality agents NEVER modify source code — they produce reports in `docs/reviews/` only
-- Design agents write ONLY to `docs/` — never to `games/` or `shared/`
+- Design agents write ONLY to `docs/` — never to `games/` or `shared/` (except Asset Creation Agent — see above)
 - No agent should run for more than 50 turns on a single task
 - The supervisor enforces a 10-minute timeout per agent run
 
 #### Supervisor Operation
-The supervisor (`supervisor/main.py`) spawns agents via `claude -p` in subprocess calls:
-1. Design tier runs sequentially (each depends on the previous output)
-2. Build tier runs in parallel (each agent in its own git worktree)
+The supervisor (`supervisor/main.py`) orchestrates agents via the Anthropic SDK:
+1. Design tier runs sequentially (each depends on the previous output):
+   - game-design → art-direction → curriculum → **assets** (new)
+   - The art-direction agent receives reference images from `docs/references/<game>/` injected directly into its context as base64 image blocks — it literally sees the images, not just text descriptions
+   - The assets agent writes `SpriteFactory.ts` to master before build agents start
+2. Build tier runs in five phases (DevEx → Coordinator → Engine → Gameplay+Math parallel → Integration)
 3. Quality tier runs after build tier completes (reviews the combined output)
 4. Creative Director reviews quality reports and approves or requests changes
 
@@ -130,6 +137,32 @@ When multiple agents work simultaneously, each uses a **separate git worktree** 
 git worktree add ../agent-1-engine feature/game-engine
 git worktree add ../agent-2-gameplay feature/gameplay-mechanics
 git worktree add ../agent-3-math feature/math-engine
+```
+
+### Visual References
+
+Before running the design tier on any game, the Creative Director drops reference images into `docs/references/<game-name>/`. The art direction agent receives these images injected directly into its API context — it sees the actual pixels, not text descriptions.
+
+**Naming convention** — use descriptive, kebab-case filenames so agents understand what each file shows without a manifest:
+```
+docs/references/missile-command-math/
+  playfield-layout-sketch.jpg          ← hand-drawn or digital layout sketch
+  missile-command-1980-screenshot.png  ← original Atari cabinet reference
+  explosion-palette-ref.png            ← color reference for explosions
+  city-silhouette-style-ref.jpg        ← skyline silhouette style
+  hud-layout-ref.jpg                   ← HUD bar composition reference
+  missile-command-1980-screenshot.png  ← overall mood / color temperature
+```
+
+**What to include:** Sketches, screenshots of reference games, mood images, color palette photos, pixel art samples you like the look of, UI composition references.
+
+**What NOT to include:** Copyrighted assets you intend to ship. References are inspiration only — the asset creation agent produces original art derived from them.
+
+**The `manifest.md` file** — also drop a `manifest.md` alongside the images. Write one sentence per image describing what to take from it. The art direction agent reads this file to understand your intent before it sees the image:
+```
+playfield-layout-sketch.jpg — My rough layout. Respect the city positions and launcher placement shown here exactly.
+missile-command-1980-screenshot.png — Original Missile Command. Match the near-black background and phosphor-green launcher color. The missiles are thin angular lines, not thick shapes.
+explosion-palette-ref.png — The pastel lavender/mint/gold explosion palette I want. NOT orange fire.
 ```
 
 ## Design Patterns — All Agents Must Follow

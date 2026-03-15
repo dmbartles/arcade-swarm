@@ -10,7 +10,10 @@ Agent tiers (in order):
   1. Design tier  — sequential; each agent depends on the previous output
        game-design   → produces docs/gdds/<game>.md
        art-direction → produces docs/style-guides/<game>.md
+                       (receives docs/references/<game>/ images as base64 in context)
        curriculum    → produces docs/curriculum-maps/<game>.md
+       assets        → produces games/<game>/src/assets/SpriteFactory.ts
+                       (receives reference images; committed to master before build starts)
 
   2. Build tier   — five phases:
        Phase 1:   DevEx        — scaffolds build tooling (package.json, vite, tsconfig,
@@ -415,6 +418,64 @@ def _load_preload_docs(agent: dict, game: str) -> tuple[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Reference image loader -- injects docs/references/<game>/ images into context
+# ---------------------------------------------------------------------------
+
+def _load_reference_images(game: str) -> list[dict]:
+    """
+    Scan docs/references/<game>/ for image files and return a list of Anthropic
+    content blocks (image + caption text) to inject into the first user message.
+
+    Supports: .png, .jpg, .jpeg, .gif, .webp
+    Images are base64-encoded and sent as image content blocks so the agent
+    literally sees the pixels, not just text descriptions.
+
+    Returns an empty list if the references directory does not exist or contains
+    no recognised image files.
+    """
+    import base64
+
+    refs_dir = REPO_ROOT / "docs" / "references" / game
+    if not refs_dir.exists():
+        return []
+
+    _MEDIA_TYPES = {
+        ".png":  "image/png",
+        ".jpg":  "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif":  "image/gif",
+        ".webp": "image/webp",
+    }
+
+    blocks: list[dict] = []
+    for img_path in sorted(refs_dir.iterdir()):
+        ext = img_path.suffix.lower()
+        if ext not in _MEDIA_TYPES or not img_path.is_file():
+            continue
+        try:
+            data = base64.standard_b64encode(img_path.read_bytes()).decode("utf-8")
+        except Exception as e:
+            log.warning("could not read reference image", path=str(img_path), error=str(e))
+            continue
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": _MEDIA_TYPES[ext],
+                "data": data,
+            },
+        })
+        blocks.append({
+            "type": "text",
+            "text": f"[Reference image: {img_path.name}]",
+        })
+
+    if blocks:
+        log.info("injecting reference images", game=game, count=len(blocks) // 2)
+    return blocks
+
+
+# ---------------------------------------------------------------------------
 # Message history compression
 # ---------------------------------------------------------------------------
 
@@ -489,7 +550,10 @@ DESIGN_AGENTS = [
         "model": DESIGN_MODEL,
         "max_tokens": DESIGN_MAX_TOKENS,
         # GDD exists because game-design ran first (design tier is sequential).
+        # inject_references=True causes docs/references/<game>/ images to be
+        # base64-encoded and prepended to the first user message as image blocks.
         "preload": ["CLAUDE.md", "docs/briefs/{game}.md", "docs/gdds/{game}.md"],
+        "inject_references": True,
     },
     {
         "name": "curriculum",
@@ -498,6 +562,18 @@ DESIGN_AGENTS = [
         "model": DESIGN_MODEL,
         "max_tokens": DESIGN_MAX_TOKENS,
         "preload": ["CLAUDE.md", "docs/briefs/{game}.md", "docs/gdds/{game}.md"],
+    },
+    {
+        "name": "assets",
+        "prompt": "agents/design/assets.md",
+        "tools": ["Read", "Write", "Edit"],
+        "model": BUILD_MODEL,          # Opus: drawing code requires the same precision as game code
+        "max_tokens": BUILD_MAX_TOKENS,
+        # Style guide exists because art-direction ran first.
+        # inject_references=True so the agent sees the actual reference images
+        # when deciding how to draw each sprite.
+        "preload": ["CLAUDE.md", "docs/style-guides/{game}.md"],
+        "inject_references": True,
     },
 ]
 
@@ -561,6 +637,9 @@ ENGINE_AGENT = {
         "docs/gdds/{game}.md",
         "docs/style-guides/{game}.md",
         "docs/build-plans/{game}-engine.md",
+        # SpriteFactory -- pre-loaded so the engine agent knows the full texture
+        # key API before writing any scene or entity code.
+        "games/{game}/src/assets/SpriteFactory.ts",
         # Type stubs -- pre-loaded so the agent knows exact exports before writing imports,
         # avoiding typecheck failures caused by importing from the wrong source file.
         "games/{game}/src/types/GameEvents.ts",
@@ -587,6 +666,8 @@ GAMEPLAY_AGENT = {
         "docs/gdds/{game}.md",
         "docs/style-guides/{game}.md",
         "docs/build-plans/{game}-gameplay.md",
+        # SpriteFactory -- gameplay entities use sprite keys; must know the API.
+        "games/{game}/src/assets/SpriteFactory.ts",
         # Type stubs -- pre-loaded so the agent knows exact exports before writing imports.
         "games/{game}/src/types/GameEvents.ts",
         "games/{game}/src/types/IMathProblem.ts",
@@ -818,15 +899,27 @@ def run_agent(
         + "\n\n"
     )
 
-    user_message = (
+    text_message = (
         f"Game name: {game}\n\n"
         + os_notice
         + preload_notice
         + f"## Your Task\n{task_body}"
     )
 
+    # Inject visual reference images for agents that request it.
+    # Images are prepended before the text so the agent sees them first.
+    reference_image_blocks = (
+        _load_reference_images(game) if agent.get("inject_references") else []
+    )
+    if reference_image_blocks:
+        first_message_content: str | list = (
+            reference_image_blocks + [{"type": "text", "text": text_message}]
+        )
+    else:
+        first_message_content = text_message
+
     tools    = [ALL_TOOLS[t] for t in agent["tools"] if t in ALL_TOOLS]
-    messages = [{"role": "user", "content": user_message}]
+    messages = [{"role": "user", "content": first_message_content}]
 
     log.info("agent starting", name=agent["name"], game=game, model=model, cwd=str(cwd))
 
@@ -1332,6 +1425,62 @@ async def run_build_agent_async(
 # Tier runners
 # ---------------------------------------------------------------------------
 
+def _commit_sprite_factory(game: str, run_log_dir: Path) -> bool:
+    """
+    Commit games/<game>/src/assets/ to master after the assets agent completes.
+
+    Build worktrees branch from HEAD at creation time, so SpriteFactory.ts must
+    be committed to master before any build worktree is created — otherwise build
+    agents will not see the pre-built assets.
+    Returns True on success (or if there is nothing new to commit), False on failure.
+    """
+    commit_log = run_log_dir / "commit-sprite-factory.log"
+    assets_glob = f"games/{game}/src/assets/"
+    log.info("committing SpriteFactory to master", game=game)
+
+    with open(commit_log, "w", encoding="utf-8") as f:
+        f.write(f"=== Commit SpriteFactory | {_ts()} ===\n\n")
+
+        stage = subprocess.run(
+            ["git", "add", assets_glob],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        f.write(f"git add: {stage.stdout or '(ok)'}\n")
+        if stage.stderr:
+            f.write(f"STDERR: {stage.stderr}\n")
+        if stage.returncode != 0:
+            f.write(f"[{_ts()}] X git add failed\n")
+            log.error("git add SpriteFactory failed")
+            return False
+
+        diff = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=REPO_ROOT, capture_output=True,
+        )
+        if diff.returncode == 0:
+            f.write(f"[{_ts()}] Nothing to commit -- SpriteFactory already in index\n")
+            log.info("SpriteFactory already committed to master")
+            return True
+
+        commit = subprocess.run(
+            ["git", "commit", "-m", f"chore: sprite factory assets for {game}"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if commit.stdout:
+            f.write(commit.stdout)
+        if commit.stderr:
+            f.write(f"STDERR: {commit.stderr}\n")
+
+        if commit.returncode != 0:
+            f.write(f"[{_ts()}] X COMMIT FAILED\n")
+            log.error("SpriteFactory commit failed")
+            return False
+
+        f.write(f"[{_ts()}] + SpriteFactory committed to master\n")
+        log.info("SpriteFactory committed to master")
+        return True
+
+
 def run_design_tier(game: str, run_log_dir: Path):
     log.info("=== Design Tier (sequential) ===")
     for agent in DESIGN_AGENTS:
@@ -1342,6 +1491,13 @@ def run_design_tier(game: str, run_log_dir: Path):
             log.error("design agent failed", name=agent["name"], log=str(agent_log))
             raise SystemExit(1)
         log.info("design agent complete", name=agent["name"])
+        # After the assets agent, commit SpriteFactory.ts to master so build
+        # worktrees (which branch from HEAD) inherit the pre-built sprite assets.
+        if agent["name"] == "assets":
+            if not _commit_sprite_factory(game, run_log_dir):
+                log.error("SpriteFactory commit failed -- build agents will not see pre-built assets")
+                raise SystemExit(1)
+            log.info("SpriteFactory on master -- build worktrees will inherit it")
 
 
 async def run_build_tier_async(
