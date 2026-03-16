@@ -89,6 +89,21 @@ Write the style guide using **exactly** this section structure. Stay within the 
 |-----------|---|---|-------|--------|--------|
 | ...       | ...| ...| ...  | ...    | ...    |
 
+## Animations
+<!--
+  Table: one row per Phaser animation. This is the authoritative animation contract —
+  the Asset Creation Agent implements every row verbatim in registerAnimations().
+  - Anim Key:    SCREAMING_SNAKE_CASE; becomes an ANIM_KEYS entry
+  - Sprite Key:  must exactly match an Asset ID from the Sprite Specifications table above
+  - Start/End Frame: 0-indexed frame numbers within the sprite sheet
+  - Frame Rate:  fps (integer)
+  - Repeat:      0 = play once; -1 = loop forever; N = repeat N times
+  - Yoyo:        true = ping-pong back to start; false = normal
+-->
+| Anim Key | Sprite Key | Start Frame | End Frame | Frame Rate (fps) | Repeat | Yoyo | Notes |
+|----------|-----------|-------------|-----------|-----------------|--------|------|-------|
+| ...      | ...       | ...         | ...       | ...             | ...    | ...  | ...   |
+
 ## Visual Effects
 <!-- Table: effect name, trigger, duration (ms), key parameters -->
 | Effect | Trigger | Duration (ms) | Parameters |
@@ -110,7 +125,9 @@ The game name has been provided to you. Do the following steps in order:
 5. Write the style guide to `docs/style-guides/<game-name>.md` using the template above exactly.
    - Replace `<game-name>` / `<Game Name>` with the actual game name.
    - Fill the Visual Anchors table first — cite what you saw and what it drove.
+   - Fill the Sprite Specifications table — every sprite the game needs, one row each.
+   - Fill the Animations table — every animated sprite gets at least one row. Single-frame sprites that never animate may be omitted. Every Sprite Key value in this table must exactly match an Asset ID in the Sprite Specifications table.
    - Fill every remaining table with real values derived from the references, brief, and GDD.
-   - Keep total output ≤ 350 lines.
+   - Keep total output ≤ 500 lines.
 
 Every color must be a hex code. Every size must be in pixels. Do not stop until the style guide file has been written.

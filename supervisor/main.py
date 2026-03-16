@@ -8,14 +8,17 @@ directly through the API — no claude -p subprocess, no conversational drift.
 
 Agent tiers (in order):
   1. Design tier  — sequential; each agent depends on the previous output
-       game-design   → produces docs/gdds/<game>.md
-       art-direction → produces docs/style-guides/<game>.md
-                       (receives docs/references/<game>/ images as base64 in context)
-       curriculum    → produces docs/curriculum-maps/<game>.md
-       assets        → produces games/<game>/src/assets/SpriteFactory.ts
+       game-design     → produces docs/gdds/<game>.md
+       art-direction   → produces docs/style-guides/<game>.md
+                         (receives docs/references/<game>/ images as base64 in context)
+       sound-direction → produces docs/sound-guides/<game>.md
+                         (reads style guide as tonal anchor; defines every sound event,
+                          music track, library choice, and volume hierarchy)
+       curriculum      → produces docs/curriculum-maps/<game>.md
+       assets          → produces games/<game>/src/assets/SpriteFactory.ts
                        (receives reference images; committed to master before build starts)
 
-  2. Build tier   — five phases:
+  2. Build tier   — five phases (sound-guide is on master before this tier starts):
        Phase 1:   DevEx        — scaffolds build tooling (package.json, vite, tsconfig,
                                  index.html) + writes src/types/ interface stubs.
                                  Runs in its own worktree (feature/build-pipeline).
@@ -118,7 +121,7 @@ LOGS_DIR = Path(__file__).parent / "logs"
 # ---------------------------------------------------------------------------
 DESIGN_MODEL  = "claude-sonnet-4-6"         # markdown doc generation from creative briefs
 COORD_MODEL   = "claude-sonnet-4-6"         # structured planning from design documents
-BUILD_MODEL   = "claude-opus-4-6"           # complex multi-file code generation
+BUILD_MODEL   = "claude-sonnet-4-6"           # complex multi-file code generation
 QUALITY_MODEL = "claude-sonnet-4-6"         # code review and structured reporting
 SMOKE_MODEL   = "claude-haiku-4-5-20251001" # 2-turn API + file I/O connectivity check
 
@@ -556,6 +559,16 @@ DESIGN_AGENTS = [
         "inject_references": True,
     },
     {
+        "name": "sound-direction",
+        "prompt": "agents/design/sound-direction.md",
+        "tools": ["Read", "Write", "Edit"],
+        "model": DESIGN_MODEL,
+        "max_tokens": DESIGN_MAX_TOKENS,
+        # Style guide exists because art-direction ran first; drives tonal anchoring.
+        # Sound guide must be on master before build tier so engine agent can preload it.
+        "preload": ["CLAUDE.md", "docs/briefs/{game}.md", "docs/gdds/{game}.md", "docs/style-guides/{game}.md"],
+    },
+    {
         "name": "curriculum",
         "prompt": "agents/design/curriculum.md",
         "tools": ["Read", "Write", "Edit"],
@@ -613,6 +626,7 @@ COORDINATOR_AGENT = {
         "CLAUDE.md",
         "docs/gdds/{game}.md",
         "docs/style-guides/{game}.md",
+        "docs/sound-guides/{game}.md",
         "docs/curriculum-maps/{game}.md",
         "games/{game}/src/types/GameEvents.ts",
         "games/{game}/src/types/IMathProblem.ts",
@@ -636,6 +650,7 @@ ENGINE_AGENT = {
         "CLAUDE.md",
         "docs/gdds/{game}.md",
         "docs/style-guides/{game}.md",
+        "docs/sound-guides/{game}.md",
         "docs/build-plans/{game}-engine.md",
         # SpriteFactory -- pre-loaded so the engine agent knows the full texture
         # key API before writing any scene or entity code.

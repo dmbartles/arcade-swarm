@@ -30,43 +30,66 @@ Build agents are engineers, not artists. Without pre-built assets they produce c
 
 ## SpriteFactory API Contract
 
-Build agents will use exactly this interface — do not change the method signatures:
+Build agents will use exactly this interface — do not change the method signatures or exported const names:
 
 ```typescript
 // games/<game>/src/assets/SpriteFactory.ts
+
+/**
+ * Typed sprite key constants. Import and use these — never use raw strings.
+ * A typo here is a compile error; a typo in a raw string is a silent runtime failure.
+ */
+export const SPRITE_KEYS = {
+  // One entry per sprite in the style guide's Sprite Specifications table.
+  // Key names match the Asset ID column exactly.
+  EXAMPLE_BOMB:    'EXAMPLE_BOMB',
+  EXAMPLE_LAUNCHER:'EXAMPLE_LAUNCHER',
+  // ... etc
+} as const;
+
+export type SpriteKey = typeof SPRITE_KEYS[keyof typeof SPRITE_KEYS];
+
+/**
+ * Typed animation key constants. Import and use these — never use raw strings.
+ */
+export const ANIM_KEYS = {
+  // One entry per animation in the style guide's Animations table.
+  EXAMPLE_EXPLOSION_BURST: 'EXAMPLE_EXPLOSION_BURST',
+  // ... etc
+} as const;
+
+export type AnimKey = typeof ANIM_KEYS[keyof typeof ANIM_KEYS];
+
 export class SpriteFactory {
   /**
-   * Register all game sprites as Phaser textures.
+   * Register all textures with Phaser.
    * Call this inside your Phaser Scene's preload() method.
    */
   static preload(scene: Phaser.Scene): void { ... }
+
+  /**
+   * Register all Phaser animations.
+   * Call this inside your Phaser Scene's create() method, AFTER preload() has run.
+   * Phaser requires textures to exist before animations can reference their frames.
+   */
+  static registerAnimations(scene: Phaser.Scene): void { ... }
 }
 ```
 
-After `preload()` runs, build agents can use sprite keys exactly as named in the style guide's Asset ID column:
+After `preload()` and `registerAnimations()` run, build agents reference sprites and animations using the exported consts — never raw strings:
 ```typescript
-// e.g. in a Phaser scene:
-this.add.image(x, y, 'SPRITE_MISSILE_STANDARD');
-this.add.sprite(x, y, 'SPRITE_EXPLOSION_PLAYER');
+import { SPRITE_KEYS, ANIM_KEYS } from '../assets';
+
+// Texture usage:
+this.add.image(x, y, SPRITE_KEYS.EXAMPLE_BOMB);
+
+// Animation usage:
+sprite.play(ANIM_KEYS.EXAMPLE_EXPLOSION_BURST);
 ```
 
 ## Drawing Quality Standards
 
-For each sprite, write drawing code that matches the style guide's Visual Description column. Guidance:
-
-**Missiles** — angular cones or thin cylinders, not rectangles. Use `ctx.beginPath()` / `ctx.lineTo()` for sharp geometry. Flame tail: small triangle or teardrop shape at the base, alternating between two frame colors.
-
-**Cities** — pixel-art skyline silhouettes. Use filled rectangles of varying heights to suggest buildings. The city's landmark (Space Needle, Capitol dome, etc.) should be recognizable as a distinctive tall shape. Fill with the city active color token; no outlines.
-
-**Launcher base** — squat trapezoid or bunker shape. Barrel is a separate thin rectangle that will be rotated by game code. Use the phosphor green token.
-
-**Explosions** — concentric circle rings expanding outward across frames. Frame 0: tight core circle. Frame N: large outer ring nearly transparent. Use `ctx.arc()` with `ctx.createRadialGradient()` if the style guide specifies color transitions.
-
-**Paratrooper** — stick figure with an open canopy above (semicircle with lines to shoulders). Simple, readable at 14px wide.
-
-**Bomber** — elongated fuselage (thin rounded rectangle), two swept wings (triangles), tail fin. B-52 silhouette suggestion is sufficient — this is pixel art, not a photograph.
-
-**Trajectory lines and queue slots** — these are drawn at runtime by game code via Phaser Graphics, NOT via SpriteFactory. Skip them.
+For each sprite, write drawing code that matches the style guide's Visual Description column.
 
 ## Output Template
 
@@ -78,14 +101,36 @@ For each sprite, write drawing code that matches the style guide's Visual Descri
  *
  * All color constants are taken directly from the visual style guide.
  * All dimensions match the Sprite Specifications table exactly.
+ * All animation configs match the Animations table exactly.
  */
 import Phaser from 'phaser';
 
 // ---------------------------------------------------------------------------
-// Color constants (from style guide)
+// Color constants (from style guide Color Palette table)
 // ---------------------------------------------------------------------------
-const COLOR_BG           = '#0A0A0F';
-// ... one constant per color token
+const COLOR_BG = '#000000';
+// ... one constant per color token in the style guide
+
+// ---------------------------------------------------------------------------
+// Sprite key constants — import these; never use raw strings
+// ---------------------------------------------------------------------------
+export const SPRITE_KEYS = {
+  // Fill from style guide Sprite Specifications table — one entry per Asset ID row
+  EXAMPLE_BOMB:     'EXAMPLE_BOMB',
+  EXAMPLE_LAUNCHER: 'EXAMPLE_LAUNCHER',
+} as const;
+
+export type SpriteKey = typeof SPRITE_KEYS[keyof typeof SPRITE_KEYS];
+
+// ---------------------------------------------------------------------------
+// Animation key constants — import these; never use raw strings
+// ---------------------------------------------------------------------------
+export const ANIM_KEYS = {
+  // Fill from style guide Animations table — one entry per Anim Key row
+  EXAMPLE_EXPLOSION_BURST: 'EXAMPLE_EXPLOSION_BURST',
+} as const;
+
+export type AnimKey = typeof ANIM_KEYS[keyof typeof ANIM_KEYS];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -106,24 +151,33 @@ function ctx2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 // SpriteFactory
 // ---------------------------------------------------------------------------
 export class SpriteFactory {
+  /** Call inside Phaser Scene preload(). Registers all textures. */
   static preload(scene: Phaser.Scene): void {
-    SpriteFactory._registerMissiles(scene);
-    SpriteFactory._registerExplosions(scene);
-    SpriteFactory._registerCities(scene);
-    SpriteFactory._registerLauncher(scene);
-    SpriteFactory._registerBomber(scene);
-    SpriteFactory._registerParatrooper(scene);
-    SpriteFactory._registerUI(scene);
+    SpriteFactory._registerGroup1(scene);
+    SpriteFactory._registerGroup2(scene);
+    // ... one private method per logical sprite group from the style guide
+  }
+
+  /**
+   * Call inside Phaser Scene create(), AFTER preload() has run.
+   * Registers all Phaser animations from the style guide Animations table.
+   * Phaser requires textures to exist before animations can reference their frames.
+   */
+  static registerAnimations(scene: Phaser.Scene): void {
+    // Implement every row from the style guide Animations table.
+    // Use SPRITE_KEYS and ANIM_KEYS — never raw strings.
+    scene.anims.create({
+      key: ANIM_KEYS.EXAMPLE_EXPLOSION_BURST,
+      frames: scene.anims.generateFrameNumbers(SPRITE_KEYS.EXAMPLE_BOMB, { start: 0, end: 7 }),
+      frameRate: 24,
+      repeat: 0,
+    });
+    // ... one block per row in the Animations table
   }
 
   // One private method per logical sprite group
-  private static _registerMissiles(scene: Phaser.Scene): void { ... }
-  private static _registerExplosions(scene: Phaser.Scene): void { ... }
-  private static _registerCities(scene: Phaser.Scene): void { ... }
-  private static _registerLauncher(scene: Phaser.Scene): void { ... }
-  private static _registerBomber(scene: Phaser.Scene): void { ... }
-  private static _registerParatrooper(scene: Phaser.Scene): void { ... }
-  private static _registerUI(scene: Phaser.Scene): void { ... }
+  private static _registerGroup1(scene: Phaser.Scene): void { /* ... */ }
+  private static _registerGroup2(scene: Phaser.Scene): void { /* ... */ }
 }
 ```
 
@@ -134,7 +188,14 @@ The game name has been provided to you. Do the following steps in order:
 1. Check your context for injected reference images. Study them for visual detail — shapes, proportions, silhouettes — before reading documents.
 2. Read `docs/references/<game-name>/manifest.md` if present (Glob `docs/references/<game-name>/*` first).
 3. Read `docs/style-guides/<game-name>.md` in full (pre-loaded — do not re-read via tool). If it does not exist, stop and report that the Art Direction Agent must run first.
-4. Create the `games/<game-name>/src/assets/` directory if it does not exist (the Write tool creates parent directories automatically).
-5. Write `games/<game-name>/src/assets/SpriteFactory.ts` implementing every sprite in the Sprite Specifications table.
-6. Write `games/<game-name>/src/assets/index.ts` re-exporting `SpriteFactory`.
-7. Do not stop until both files are written and every sprite from the style guide is implemented.
+4. Build your sprite and animation inventory from the style guide before writing any code:
+   - List every row from the Sprite Specifications table → these become `SPRITE_KEYS` entries
+   - List every row from the Animations table → these become `ANIM_KEYS` entries
+   - Do not invent keys not present in those tables.
+5. Write `games/<game-name>/src/assets/SpriteFactory.ts`:
+   - `SPRITE_KEYS` const — one entry per Sprite Specifications row
+   - `ANIM_KEYS` const — one entry per Animations table row
+   - `SpriteFactory.preload()` — registers every texture; implements every Sprite Specifications row in Canvas drawing code
+   - `SpriteFactory.registerAnimations()` — registers every Phaser animation; implements every Animations table row verbatim (key, frames, frameRate, repeat, yoyo)
+6. Write `games/<game-name>/src/assets/index.ts` re-exporting `SpriteFactory`, `SPRITE_KEYS`, `ANIM_KEYS`, `SpriteKey`, and `AnimKey`.
+7. Do not stop until both files are written, every sprite is implemented, and every animation is registered.

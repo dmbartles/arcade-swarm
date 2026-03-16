@@ -10,29 +10,13 @@ Keep entries to one sentence focused on what you want preserved or taken from th
 
 ## Reference Image Descriptions
 
-| Filename | What to take from this image |
-|----------|------------------------------|
-| *(no references added yet — add image files to this folder and describe them here)* | |
-
----
-
-## Suggested images to add
-
-Drop any of the following into this folder and add a row to the table above:
-
-- **Overall mood / color temperature** — A screenshot of the original Atari Missile Command arcade game. Shows the deep near-black background, the phosphor-green launcher, and simple colored city silhouettes.
-- **Playfield layout** — A rough hand-drawn or digital sketch of where the cities, launcher, missiles, and queue strip sit on screen. Even a photo of a napkin sketch works. The art direction agent will respect your layout intent.
-- **Explosion palette** — Any image showing the pastel lavender/mint/gold color palette you want for explosions. Could be a paint swatch photo, a screenshot from another game you like, anything with the right colors.
-- **City silhouette style** — A pixel art skyline or any image showing the kind of building silhouette style you want for the six cities.
-- **HUD / UI reference** — A screenshot of any game whose HUD layout, font style, or score display you like the look of.
-- **Missile style** — Any image showing the kind of angular, thin missile design you want. Could be an original Missile Command screenshot cropped to just a missile.
-
----
-
-## Example entry (delete this when you add your own)
-
 ```
-| missile-command-1980-screenshot.png | Original Atari Missile Command. Match the near-black background and phosphor-green launcher exactly. Missiles are thin angular lines — NOT thick shapes. Cities are simple rectangular silhouettes in warm gold. |
-| explosion-palette-ref.png | The pastel lavender/mint/gold explosion palette I want. NOT orange fire. The outer ring should be this specific lavender. |
-| playfield-sketch.jpg | My layout sketch. Respect the city row positions and the centered launcher exactly as drawn. |
+| Gameplay.jpg | Here is the overall style of the game where missile launchers each have a number on them that corresponds to a problem that is next to an incoming bomb the launchers must launch the answer to the question before it hits and destroys the city note incoming bomb must coordinate with A answer from one of the missile launchers ensuring the player doesn't have See bomb which they can't shoot down with a missile. |
+| Launcher and Bomb.jpg | The launcher is a simple shape in the turret follows where the mouse is pointing when the player click where they want the bomb to be launched using the mouse it will launch a small missile in the same color as the launcher. The bomb is a 1940s esque bomb that falls with a linear trajectory and has a math problem that follows alongside of it |
+| Heads Up Display.jpg | This tracks the remaining population that lives in the buildings , the number of incoming bombs remaining, and the level the user is playing |
+| City Scape.jpg |  This is what the city looks like at the start of the level |
+| City destroyed 01.jpg and city destroyed 02.jpg | This is what a city looks like after a bomb has landed on it and the user has not shot the bomb down with a missile |
+| Explosion.jpg | This is what it looks like when a bomb explodes or detonates when it hits the ground |
+| Missle.jpg | This is what a small missile looks like coming out of one of the  missile launchers |
+|Bomber.jpg | In the later levels strategic bombers may travel left to right and drop bombs on buildings as well |
 ```

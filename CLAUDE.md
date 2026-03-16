@@ -54,7 +54,7 @@ python main.py
 - `supervisor/` — Python orchestration layer that spawns and coordinates Claude Code agent instances
 - `docs/briefs/` — Creative briefs from the Creative Director (source of truth for design intent)
 - `docs/references/<game-name>/` — **Visual reference images** dropped in by the Creative Director before build starts. The art direction agent reads these images directly and must anchor every major style decision to a file found here. See [Visual References](#visual-references) below for naming conventions.
-- `docs/gdds/`, `docs/style-guides/`, `docs/curriculum-maps/` — Agent-generated artifacts
+- `docs/gdds/`, `docs/style-guides/`, `docs/sound-guides/`, `docs/curriculum-maps/` — Agent-generated artifacts
 - `docs/build-plans/` — Per-agent build plans written by the Coordinator agent
 - `docs/reviews/` — Quality tier agent reports (architecture, security, QA, accessibility, performance)
 - `docs/adrs/` — Architecture Decision Records
@@ -68,6 +68,7 @@ This project is built by a swarm of Claude Code agents, all orchestrated by a Py
 **Design Tier** — Produce specifications, not code. Write only to `docs/`.
 - Game Design Agent: Reads creative briefs, produces Game Design Documents
 - Art Direction Agent: Reads creative briefs + GDD + **visual reference images from `docs/references/<game>/`**; produces visual style guides with exact hex codes, font specs, sprite dimensions — every decision anchored to a reference
+- Sound Direction Agent: Reads brief + GDD + visual style guide (as tonal anchor); produces `docs/sound-guides/<game>.md` — defines every sound event ID, music track, npm library choice, volume hierarchy, and audio polish rules. Build agents must not make audio decisions not specified here.
 - Curriculum Alignment Agent: Maps math content to Common Core standards by grade level
 - Asset Creation Agent: Reads style guide + references; writes `games/<game>/src/assets/SpriteFactory.ts` — procedurally draws every sprite in the style guide using HTML Canvas so build agents load real pixel art, not rectangles
 
@@ -182,6 +183,7 @@ explosion-palette-ref.png — The pastel lavender/mint/gold explosion palette I 
 - Mobile-first: every feature must work on touch screens
 - Target 60fps on a 3-year-old mid-range Android phone
 - Game state during gameplay lives in memory only — see the localStorage Policy section for exactly what is and is not permitted
+- **Never use raw string literals for sprite or animation keys.** Always import `SPRITE_KEYS` and `ANIM_KEYS` from `src/assets` and reference keys through those consts. A typo in a raw string is a silent runtime failure; a typo in a const reference is a compile error caught before the game runs.
 
 ## Git Workflow
 
