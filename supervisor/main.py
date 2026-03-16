@@ -135,6 +135,7 @@ QUALITY_MAX_TOKENS = 8_192    # review reports
 SMOKE_MAX_TOKENS   = 4_096    # 2-turn smoke check
 
 MAX_TURNS    = 50             # per CLAUDE.md: no agent run exceeds 50 turns
+AGENT_TIMEOUT_SECONDS = 600  # 10-minute wall-clock limit per agent run, per CLAUDE.md
 MAX_RETRIES  = 3              # retries on 429 rate-limit / 529 overloaded errors
 RETRY_DELAYS = [30, 60, 120]  # seconds between retries
 
@@ -816,6 +817,16 @@ BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
 # Phase 4 merge: only gameplay + math. Engine was already merged after Phase 3.
 _PHASE4_MERGE_AGENTS = PARALLEL_CODING_AGENTS
 
+# Ordered build phase names — used for start_after / stop_after comparisons.
+_BUILD_PHASE_ORDER = ["devex", "coordinator", "engine"]
+
+
+def _phase_skipped(phase: str, start_after: str | None) -> bool:
+    """Return True if this phase should be skipped given --start-after."""
+    if start_after is None:
+        return False
+    return _BUILD_PHASE_ORDER.index(phase) <= _BUILD_PHASE_ORDER.index(start_after)
+
 
 # ---------------------------------------------------------------------------
 # Agent runner
@@ -826,6 +837,7 @@ def run_agent(
     game: str,
     cwd: Path,
     agent_log_file: Path,
+    client: anthropic.Anthropic = None,
     extra_task_context: str | None = None,
 ) -> int:
     """
@@ -847,13 +859,6 @@ def run_agent(
     Automatically retries up to MAX_RETRIES times on 429/529 errors with
     exponential back-off. All turns and tool calls are written to agent_log_file.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        log.error("ANTHROPIC_API_KEY not set")
-        return 1
-
-    client = anthropic.Anthropic(api_key=api_key)
-
     model      = agent.get("model",      BUILD_MODEL)
     max_tokens = agent.get("max_tokens", BUILD_MAX_TOKENS)
 
@@ -952,7 +957,15 @@ def run_agent(
         if preloaded_paths:
             write(f"Pre-loaded: {', '.join(preloaded_paths)}\n\n")
 
+        start_time = time.monotonic()
         while turn < MAX_TURNS:
+            if time.monotonic() - start_time > AGENT_TIMEOUT_SECONDS:
+                write(
+                    f"[{_ts()}] X FAILED: agent exceeded {AGENT_TIMEOUT_SECONDS}s "
+                    f"wall-clock timeout.\n"
+                )
+                log.error("agent hit wall-clock timeout", name=agent["name"], seconds=AGENT_TIMEOUT_SECONDS)
+                return 1
             turn += 1
             write(f"\n--- Turn {turn} | {_ts()} ---\n")
 
@@ -974,6 +987,13 @@ def run_agent(
                         messages=api_messages,
                     ) as stream:
                         response = stream.get_final_message()
+                    usage = response.usage
+                    write(
+                        f"[{_ts()}] [usage] input={usage.input_tokens} "
+                        f"output={usage.output_tokens} "
+                        f"cache_read={getattr(usage, 'cache_read_input_tokens', 0)} "
+                        f"cache_create={getattr(usage, 'cache_creation_input_tokens', 0)}\n"
+                    )
                     break  # success
 
                 except (anthropic.RateLimitError, anthropic.InternalServerError) as e:
@@ -1200,223 +1220,147 @@ def clean_build_state() -> None:
 # Inter-phase git operations
 # ---------------------------------------------------------------------------
 
-def merge_devex_branch(run_log_dir: Path) -> bool:
-    """
-    Phase 1a: merge feature/build-pipeline into master after DevEx completes.
-
-    This makes the type stubs (src/types/) written by DevEx visible in REPO_ROOT
-    so the Coordinator can read them, and so coding worktrees (which branch from
-    HEAD at creation time) will contain them.
-    """
-    branch = DEVEX_AGENT["branch"]
-    merge_log = run_log_dir / "merge-devex.log"
-    log.info("merging devex branch into master", branch=branch)
-
+def _git_merge(branch: str, message: str, run_log_dir: Path, log_name: str) -> bool:
+    """Merge branch into master. Returns True on success or already-up-to-date."""
+    merge_log = run_log_dir / log_name
+    log.info("merging branch into master", branch=branch)
     with open(merge_log, "w", encoding="utf-8") as f:
-        f.write(f"=== Phase 1a: Merge {branch} -> master | {_ts()} ===\n\n")
-
+        f.write(f"=== Merge {branch} -> master | {_ts()} ===\n\n")
         result = subprocess.run(
-            ["git", "merge", "--no-ff", branch, "-m",
-             f"chore: merge {branch} (build tooling + type stubs)"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
+            ["git", "merge", "--no-ff", branch, "-m", message],
+            cwd=REPO_ROOT, capture_output=True, text=True,
         )
         if result.stdout:
             f.write(result.stdout)
         if result.stderr:
             f.write(f"STDERR: {result.stderr}\n")
-
         if result.returncode != 0:
-            # "Already up to date" means DevEx made no new commits -- not a failure.
             if "already up to date" in (result.stdout + result.stderr).lower():
-                f.write(f"[{_ts()}] Already up to date -- nothing new to merge\n")
-                log.info("devex branch already up to date", branch=branch)
+                f.write(f"[{_ts()}] Already up to date\n")
+                log.info("branch already up to date", branch=branch)
                 return True
             f.write(f"[{_ts()}] X MERGE FAILED for {branch}\n")
-            log.error("devex merge failed", branch=branch, merge_log=str(merge_log))
+            log.error("merge failed", branch=branch, merge_log=str(merge_log))
             return False
-
         f.write(f"[{_ts()}] + Merged {branch} into master\n")
-        log.info("devex branch merged into master", branch=branch)
+        log.info("branch merged into master", branch=branch)
         return True
 
 
-def commit_build_plans(game: str, run_log_dir: Path) -> bool:
-    """
-    Phase 1b: commit the Coordinator's build plans to master.
-
-    Build plans are written by the Coordinator as untracked files in REPO_ROOT.
-    Committing them to master ensures every coding worktree (branched from HEAD)
-    will contain them at creation time -- no Read-tool round-trip needed.
-    """
-    commit_log = run_log_dir / "commit-build-plans.log"
-    log.info("committing coordinator build plans to master", game=game)
-
-    plan_files = [
-        f"docs/build-plans/{game}-engine.md",
-        f"docs/build-plans/{game}-gameplay.md",
-        f"docs/build-plans/{game}-math.md",
-    ]
-
+def _git_commit(paths: list[str], message: str, run_log_dir: Path, log_name: str) -> bool:
+    """Stage paths and commit to master. Returns True on success or nothing-to-commit."""
+    commit_log = run_log_dir / log_name
+    log.info("committing to master", message=message)
     with open(commit_log, "w", encoding="utf-8") as f:
-        f.write(f"=== Phase 1b: Commit build plans | {_ts()} ===\n\n")
-
+        f.write(f"=== Commit | {_ts()} ===\n\n")
         stage = subprocess.run(
-            ["git", "add", "--"] + plan_files,
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
+            ["git", "add", "--"] + paths,
+            cwd=REPO_ROOT, capture_output=True, text=True,
         )
         f.write(f"git add: {stage.stdout or '(ok)'}\n")
         if stage.stderr:
             f.write(f"STDERR: {stage.stderr}\n")
         if stage.returncode != 0:
             f.write(f"[{_ts()}] X git add failed\n")
-            log.error("git add build plans failed")
+            log.error("git add failed")
             return False
-
-        # Check if there is anything staged before committing
         diff = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
-            cwd=REPO_ROOT,
-            capture_output=True,
+            cwd=REPO_ROOT, capture_output=True,
         )
         if diff.returncode == 0:
-            f.write(f"[{_ts()}] Nothing to commit -- build plans already in index\n")
-            log.info("build plans already committed to master")
+            f.write(f"[{_ts()}] Nothing to commit -- already in index\n")
+            log.info("nothing new to commit")
             return True
-
         commit = subprocess.run(
-            ["git", "commit", "-m", f"chore: coordinator build plans for {game}"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
+            ["git", "commit", "-m", message],
+            cwd=REPO_ROOT, capture_output=True, text=True,
         )
         if commit.stdout:
             f.write(commit.stdout)
         if commit.stderr:
             f.write(f"STDERR: {commit.stderr}\n")
-
         if commit.returncode != 0:
             f.write(f"[{_ts()}] X COMMIT FAILED\n")
-            log.error("build plan commit failed")
+            log.error("commit failed")
             return False
-
-        f.write(f"[{_ts()}] + Build plans committed to master\n")
-        log.info("build plans committed to master")
+        f.write(f"[{_ts()}] + Committed to master\n")
+        log.info("committed to master")
         return True
+
+
+def merge_devex_branch(run_log_dir: Path) -> bool:
+    return _git_merge(
+        DEVEX_AGENT["branch"],
+        f"chore: merge {DEVEX_AGENT['branch']} (build tooling + type stubs)",
+        run_log_dir,
+        "merge-devex.log",
+    )
+
+
+def commit_build_plans(game: str, run_log_dir: Path) -> bool:
+    return _git_commit(
+        [
+            f"docs/build-plans/{game}-engine.md",
+            f"docs/build-plans/{game}-gameplay.md",
+            f"docs/build-plans/{game}-math.md",
+        ],
+        f"chore: coordinator build plans for {game}",
+        run_log_dir,
+        "commit-build-plans.log",
+    )
 
 
 def merge_engine_branch(run_log_dir: Path) -> bool:
-    """
-    Phase 3 completion: merge feature/game-engine into master after the engine agent finishes.
-
-    This makes the engine's config constants visible in master so gameplay and math
-    worktrees (branched from HEAD) will contain them at creation time.
-    Returns True on success, False on failure.
-    """
-    branch = ENGINE_AGENT["branch"]
-    merge_log = run_log_dir / "merge-engine.log"
-    log.info("merging engine branch into master", branch=branch)
-
-    with open(merge_log, "w", encoding="utf-8") as f:
-        f.write(f"=== Phase 3 merge: {branch} -> master | {_ts()} ===\n\n")
-
-        result = subprocess.run(
-            ["git", "merge", "--no-ff", branch, "-m",
-             f"chore: merge {branch} (engine scenes + config)"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        if result.stdout:
-            f.write(result.stdout)
-        if result.stderr:
-            f.write(f"STDERR: {result.stderr}\n")
-
-        if result.returncode != 0:
-            if "already up to date" in (result.stdout + result.stderr).lower():
-                f.write(f"[{_ts()}] Already up to date -- nothing new to merge\n")
-                log.info("engine branch already up to date", branch=branch)
-                return True
-            f.write(f"[{_ts()}] X MERGE FAILED for {branch}\n")
-            log.error("engine merge failed", branch=branch, merge_log=str(merge_log))
-            return False
-
-        f.write(f"[{_ts()}] + Merged {branch} into master\n")
-        log.info("engine branch merged into master", branch=branch)
-        return True
+    return _git_merge(
+        ENGINE_AGENT["branch"],
+        f"chore: merge {ENGINE_AGENT['branch']} (engine scenes + config)",
+        run_log_dir,
+        "merge-engine.log",
+    )
 
 
 def merge_build_branches(run_log_dir: Path) -> bool:
     """
     Phase 4 completion: merge gameplay + math branches into master.
-
-    Engine (feature/game-engine) was already merged after Phase 3 and is excluded here.
-    DevEx (feature/build-pipeline) was already merged after Phase 1 and is excluded here.
-    Merge order: gameplay -> math.
-    On conflict, stops immediately and prints resolution instructions.
+    Engine and DevEx were already merged in earlier phases.
+    On conflict, stops and prints resolution instructions.
     On success, removes all remaining build worktrees.
-    Returns True on success, False on conflict.
     """
     merge_log = run_log_dir / "merge.log"
-
     with open(merge_log, "w", encoding="utf-8") as f:
-
-        def write(line: str):
-            f.write(line)
-            f.flush()
-
-        write(f"=== Phase 4 merge: gameplay + math branches | {_ts()} ===\n\n")
-        write("Merging gameplay and math branches (DevEx and Engine already merged).\n\n")
-
+        f.write(f"=== Phase 4 merge: gameplay + math branches | {_ts()} ===\n\n")
         for agent in _PHASE4_MERGE_AGENTS:
-            branch = agent["branch"]
-            write(f"[{_ts()}] Merging {branch}...\n")
-            log.info("merging branch", branch=branch)
-
-            result = subprocess.run(
-                ["git", "merge", "--no-ff", branch, "-m", f"chore: merge {branch}"],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-            )
-            if result.stdout:
-                write(result.stdout)
-            if result.stderr:
-                write(f"STDERR: {result.stderr}\n")
-
-            if result.returncode != 0:
-                write(f"\n[{_ts()}] X MERGE CONFLICT in {branch}\n")
-                write("Resolve conflicts manually, then run:\n")
-                write("  git add -A && git merge --continue\n")
-                write("Then re-run the quality tier.\n")
+            if not _git_merge(
+                agent["branch"],
+                f"chore: merge {agent['branch']}",
+                run_log_dir,
+                f"merge-{agent['name']}.log",
+            ):
+                f.write(f"[{_ts()}] X MERGE CONFLICT in {agent['branch']}\n")
+                f.write("Resolve conflicts manually, then run:\n")
+                f.write("  git add -A && git merge --continue\n")
+                f.write("Then re-run the quality tier.\n")
                 log.error(
                     "merge conflict -- manual intervention required",
-                    branch=branch,
-                    merge_log=str(merge_log),
+                    branch=agent["branch"],
                 )
                 return False
+            f.write(f"[{_ts()}] + Merged {agent['branch']}\n\n")
 
-            write(f"[{_ts()}] + Merged {branch}\n\n")
-
-        # Remove all remaining build worktrees (including DevEx which is still checked out)
-        write(f"[{_ts()}] Cleaning up worktrees...\n")
+        f.write(f"[{_ts()}] Cleaning up worktrees...\n")
         for agent in BUILD_AGENTS:
             worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
             if worktree.exists():
                 r = subprocess.run(
                     ["git", "worktree", "remove", str(worktree), "--force"],
-                    cwd=REPO_ROOT,
-                    capture_output=True,
-                    text=True,
+                    cwd=REPO_ROOT, capture_output=True, text=True,
                 )
                 status = "ok" if r.returncode == 0 else r.stderr.strip()
-                write(f"[{_ts()}]   Removed {worktree.name}: {status}\n")
+                f.write(f"[{_ts()}]   Removed {worktree.name}: {status}\n")
 
         subprocess.run(["git", "worktree", "prune"], cwd=REPO_ROOT, capture_output=True)
-        write(f"\n[{_ts()}] + All branches merged. Worktrees cleaned up.\n")
+        f.write(f"\n[{_ts()}] + All branches merged. Worktrees cleaned up.\n")
         log.info("build merge complete", merge_log=str(merge_log))
 
     return True
@@ -1427,13 +1371,13 @@ def merge_build_branches(run_log_dir: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 async def run_build_agent_async(
-    agent: dict, game: str, run_log_dir: Path, executor: ThreadPoolExecutor
+    agent: dict, game: str, run_log_dir: Path, executor: ThreadPoolExecutor, client: anthropic.Anthropic = None
 ) -> int:
     """Run a build agent in its dedicated git worktree."""
     worktree = _ensure_worktree(agent)
     agent_log = run_log_dir / f"{agent['name']}.log"
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, run_agent, agent, game, worktree, agent_log)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, run_agent, agent, game, worktree, agent_log, client)
 
 
 # ---------------------------------------------------------------------------
@@ -1441,67 +1385,20 @@ async def run_build_agent_async(
 # ---------------------------------------------------------------------------
 
 def _commit_sprite_factory(game: str, run_log_dir: Path) -> bool:
-    """
-    Commit games/<game>/src/assets/ to master after the assets agent completes.
-
-    Build worktrees branch from HEAD at creation time, so SpriteFactory.ts must
-    be committed to master before any build worktree is created — otherwise build
-    agents will not see the pre-built assets.
-    Returns True on success (or if there is nothing new to commit), False on failure.
-    """
-    commit_log = run_log_dir / "commit-sprite-factory.log"
-    assets_glob = f"games/{game}/src/assets/"
-    log.info("committing SpriteFactory to master", game=game)
-
-    with open(commit_log, "w", encoding="utf-8") as f:
-        f.write(f"=== Commit SpriteFactory | {_ts()} ===\n\n")
-
-        stage = subprocess.run(
-            ["git", "add", assets_glob],
-            cwd=REPO_ROOT, capture_output=True, text=True,
-        )
-        f.write(f"git add: {stage.stdout or '(ok)'}\n")
-        if stage.stderr:
-            f.write(f"STDERR: {stage.stderr}\n")
-        if stage.returncode != 0:
-            f.write(f"[{_ts()}] X git add failed\n")
-            log.error("git add SpriteFactory failed")
-            return False
-
-        diff = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"],
-            cwd=REPO_ROOT, capture_output=True,
-        )
-        if diff.returncode == 0:
-            f.write(f"[{_ts()}] Nothing to commit -- SpriteFactory already in index\n")
-            log.info("SpriteFactory already committed to master")
-            return True
-
-        commit = subprocess.run(
-            ["git", "commit", "-m", f"chore: sprite factory assets for {game}"],
-            cwd=REPO_ROOT, capture_output=True, text=True,
-        )
-        if commit.stdout:
-            f.write(commit.stdout)
-        if commit.stderr:
-            f.write(f"STDERR: {commit.stderr}\n")
-
-        if commit.returncode != 0:
-            f.write(f"[{_ts()}] X COMMIT FAILED\n")
-            log.error("SpriteFactory commit failed")
-            return False
-
-        f.write(f"[{_ts()}] + SpriteFactory committed to master\n")
-        log.info("SpriteFactory committed to master")
-        return True
+    return _git_commit(
+        [f"games/{game}/src/assets/"],
+        f"chore: sprite factory assets for {game}",
+        run_log_dir,
+        "commit-sprite-factory.log",
+    )
 
 
-def run_design_tier(game: str, run_log_dir: Path):
+def run_design_tier(game: str, run_log_dir: Path, client: anthropic.Anthropic = None):
     log.info("=== Design Tier (sequential) ===")
     for agent in DESIGN_AGENTS:
         agent_log = run_log_dir / f"{agent['name']}.log"
         log.info("running design agent", name=agent["name"])
-        code = run_agent(agent, game, REPO_ROOT, agent_log)
+        code = run_agent(agent, game, REPO_ROOT, agent_log, client)
         if code != 0:
             log.error("design agent failed", name=agent["name"], log=str(agent_log))
             raise SystemExit(1)
@@ -1520,6 +1417,7 @@ async def run_build_tier_async(
     run_log_dir: Path,
     stop_after: str | None = None,
     start_after: str | None = None,
+    client: anthropic.Anthropic = None,
 ):
     """
     Run the build tier across five phases.
@@ -1535,23 +1433,18 @@ async def run_build_tier_async(
       "coordinator" -- skip Phases 1-2; assume build plans committed; resume from Phase 3 (engine)
       "engine"      -- skip Phases 1-3; assume engine branch merged; resume from Phase 4 (gameplay+math)
     """
-    loop = asyncio.get_event_loop()
-
     # -------------------------------------------------------------------------
     # Phase 1: DevEx -- scaffold build tooling and src/types/ interface stubs.
     # Auto-merges feature/build-pipeline -> master on completion.
     # -------------------------------------------------------------------------
-    if start_after in ("devex", "coordinator", "engine"):
+    if _phase_skipped("devex", start_after):
         log.info("=== Build Tier -- Phase 1: DevEx (SKIPPED via --start-after) ===")
     else:
         log.info("=== Build Tier -- Phase 1: DevEx (tooling + interfaces) ===")
         devex_worktree = _ensure_worktree(DEVEX_AGENT)
         devex_log = run_log_dir / f"{DEVEX_AGENT['name']}.log"
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            devex_result = await loop.run_in_executor(
-                executor, run_agent, DEVEX_AGENT, game, devex_worktree, devex_log
-            )
+        devex_result = run_agent(DEVEX_AGENT, game, devex_worktree, devex_log, client)
 
         if devex_result != 0:
             log.error("devex agent failed -- cannot proceed", log=str(devex_log))
@@ -1575,16 +1468,13 @@ async def run_build_tier_async(
     # writes docs/build-plans/<game>-engine/gameplay/math.md.
     # Auto-commits build plans to master on completion.
     # -------------------------------------------------------------------------
-    if start_after in ("coordinator", "engine"):
+    if _phase_skipped("coordinator", start_after):
         log.info("=== Build Tier -- Phase 2: Coordinator (SKIPPED via --start-after) ===")
     else:
         log.info("=== Build Tier -- Phase 2: Coordinator (build plans) ===")
         coordinator_log = run_log_dir / f"{COORDINATOR_AGENT['name']}.log"
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            coordinator_result = await loop.run_in_executor(
-                executor, run_agent, COORDINATOR_AGENT, game, REPO_ROOT, coordinator_log
-            )
+        coordinator_result = run_agent(COORDINATOR_AGENT, game, REPO_ROOT, coordinator_log, client)
 
         if coordinator_result != 0:
             log.error("coordinator agent failed -- cannot proceed to engine phase", log=str(coordinator_log))
@@ -1608,12 +1498,12 @@ async def run_build_tier_async(
     # Its config constants are imported by the gameplay and math agents.
     # Auto-merges feature/game-engine -> master on completion.
     # -------------------------------------------------------------------------
-    if start_after == "engine":
+    if _phase_skipped("engine", start_after):
         log.info("=== Build Tier -- Phase 3: Engine (SKIPPED via --start-after) ===")
     else:
         log.info("=== Build Tier -- Phase 3: Engine (scenes + config, sequential) ===")
         with ThreadPoolExecutor(max_workers=1) as executor:
-            engine_result = await run_build_agent_async(ENGINE_AGENT, game, run_log_dir, executor)
+            engine_result = await run_build_agent_async(ENGINE_AGENT, game, run_log_dir, executor, client)
 
         if isinstance(engine_result, Exception) or engine_result != 0:
             log.error("engine agent failed -- cannot proceed to parallel agents", result=str(engine_result))
@@ -1638,9 +1528,10 @@ async def run_build_tier_async(
     # Merges gameplay + math into master; cleans up all worktrees.
     # -------------------------------------------------------------------------
     log.info("=== Build Tier -- Phase 4: Gameplay + Math (parallel) ===")
+    loop = asyncio.get_running_loop()
     with ThreadPoolExecutor(max_workers=len(PARALLEL_CODING_AGENTS)) as executor:
         tasks = [
-            run_build_agent_async(agent, game, run_log_dir, executor)
+            run_build_agent_async(agent, game, run_log_dir, executor, client)
             for agent in PARALLEL_CODING_AGENTS
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1661,32 +1552,32 @@ async def run_build_tier_async(
     # -------------------------------------------------------------------------
     log.info("=== Build Tier -- Phase 5: Integration (cross-agent wiring fixes) ===")
     integration_log = run_log_dir / f"{INTEGRATION_AGENT['name']}.log"
-    integration_result = run_agent(INTEGRATION_AGENT, game, REPO_ROOT, integration_log)
+    integration_result = run_agent(INTEGRATION_AGENT, game, REPO_ROOT, integration_log, client)
     if integration_result != 0:
-        log.warning(
-            "integration agent did not complete cleanly -- manual review may be needed",
+        log.error(
+            "integration agent failed -- codebase may not compile; check log before proceeding",
             log=str(integration_log),
         )
-    else:
-        log.info("integration complete -- codebase compiles cleanly")
+        raise SystemExit(1)
+    log.info("integration complete -- codebase compiles cleanly")
     log.info("build tier complete")
 
 
-def run_smoke_test(game: str, run_log_dir: Path):
+def run_smoke_test(game: str, run_log_dir: Path, client: anthropic.Anthropic = None):
     """
     Run the smoke test agent: reads CLAUDE.md + brief, writes docs/utilities/smoke-test.md,
     reads it back. Verifies API connectivity + Read/Write tool execution in ~2 turns.
     """
     log.info("=== Smoke Test ===")
     smoke_log = run_log_dir / "smoke.log"
-    code = run_agent(SMOKE_AGENT, game, REPO_ROOT, smoke_log)
+    code = run_agent(SMOKE_AGENT, game, REPO_ROOT, smoke_log, client)
     if code != 0:
         log.error("smoke test FAILED", log=str(smoke_log))
         raise SystemExit(1)
     log.info("smoke test PASSED -- API connectivity and file I/O are working")
 
 
-async def _run_quality_tier_async(game: str, run_log_dir: Path):
+async def _run_quality_tier_async(game: str, run_log_dir: Path, client: anthropic.Anthropic = None):
     """
     Run all quality agents in parallel -- none depend on each other's output.
     Architecture, Security, Accessibility, and Performance are read-only reviewers.
@@ -1694,7 +1585,7 @@ async def _run_quality_tier_async(game: str, run_log_dir: Path):
     Quality failures are warnings only -- the Creative Director decides whether to block.
     """
     log.info("=== Quality Tier (parallel) ===")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     with ThreadPoolExecutor(max_workers=len(QUALITY_AGENTS)) as executor:
         tasks = [
@@ -1705,6 +1596,7 @@ async def _run_quality_tier_async(game: str, run_log_dir: Path):
                 game,
                 REPO_ROOT,
                 run_log_dir / f"{agent['name']}.log",
+                client,
             )
             for agent in QUALITY_AGENTS
         ]
@@ -1719,8 +1611,8 @@ async def _run_quality_tier_async(game: str, run_log_dir: Path):
             log.info("quality agent complete", name=agent["name"])
 
 
-def run_quality_tier(game: str, run_log_dir: Path):
-    asyncio.run(_run_quality_tier_async(game, run_log_dir))
+def run_quality_tier(game: str, run_log_dir: Path, client: anthropic.Anthropic = None):
+    asyncio.run(_run_quality_tier_async(game, run_log_dir, client))
 
 
 def run_patch_tier(
@@ -1729,6 +1621,7 @@ def run_patch_tier(
     fix: str | None,
     fix_file: str | None,
     then_quality: bool,
+    client: anthropic.Anthropic = None,
 ):
     """
     Run the patch agent against an already-built game.
@@ -1768,7 +1661,7 @@ def run_patch_tier(
     log.info("fix description", content=fix_description[:200] + ("..." if len(fix_description) > 200 else ""))
 
     patch_log = run_log_dir / "patch.log"
-    result = run_agent(PATCH_AGENT, game, REPO_ROOT, patch_log, extra_task_context=extra_context)
+    result = run_agent(PATCH_AGENT, game, REPO_ROOT, patch_log, client, extra_task_context=extra_context)
 
     if result != 0:
         log.error("patch agent failed", log=str(patch_log))
@@ -1777,7 +1670,7 @@ def run_patch_tier(
 
     if then_quality:
         log.info("--then-quality set: running quality tier after patch")
-        run_quality_tier(game, run_log_dir)
+        run_quality_tier(game, run_log_dir, client)
 
 
 # ---------------------------------------------------------------------------
@@ -1894,10 +1787,12 @@ def main(
             "Copy .env.example to .env in the repo root and add your key from https://console.anthropic.com"
         )
 
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
     log.info("supervisor starting", game=game, tier=tier, log_dir=str(run_log_dir))
 
     if tier == "smoke":
-        run_smoke_test(game, run_log_dir)
+        run_smoke_test(game, run_log_dir, client)
         return
 
     if tier == "clean":
@@ -1905,19 +1800,19 @@ def main(
         return
 
     if tier in ("all", "design"):
-        run_design_tier(game, run_log_dir)
+        run_design_tier(game, run_log_dir, client)
 
     if tier in ("all", "build"):
         if clean:
             log.info("--clean flag set: wiping build worktrees and branches before building")
             clean_build_state()
-        asyncio.run(run_build_tier_async(game, run_log_dir, stop_after=stop_after, start_after=start_after))
+        asyncio.run(run_build_tier_async(game, run_log_dir, stop_after=stop_after, start_after=start_after, client=client))
 
     if tier in ("all", "quality"):
-        run_quality_tier(game, run_log_dir)
+        run_quality_tier(game, run_log_dir, client)
 
     if tier == "patch":
-        run_patch_tier(game, run_log_dir, fix=fix, fix_file=fix_file, then_quality=then_quality)
+        run_patch_tier(game, run_log_dir, fix=fix, fix_file=fix_file, then_quality=then_quality, client=client)
 
     log.info("supervisor complete", game=game, tier=tier)
 
