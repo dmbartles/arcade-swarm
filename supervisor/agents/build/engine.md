@@ -96,7 +96,7 @@ Do not stop until every box is checked.
 
 Your build plan (`docs/build-plans/<game-name>-engine.md`) is pre-loaded in your system prompt — start directly from it. Do not use the Read tool to re-read it.
 
-Use **Glob** to explore what the DevEx agent has already created (e.g. `Glob("games/<game-name>/src/types/**")`).
+Run `Glob("games/<game-name>/src/**/*")` once to confirm what the DevEx agent created, then start writing immediately. Do not Read individual config files (package.json, tsconfig.json, vite.config.ts, eslint.config.js) — they are correct and do not affect your output. Every file you need to know about is already in your preloaded build plan.
 Never run recursive Bash directory listings (`dir /s`, `find .`) — use Glob instead.
 
 Implement the full game engine layer as specified in your build plan:

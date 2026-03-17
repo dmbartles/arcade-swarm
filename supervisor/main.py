@@ -1377,6 +1377,24 @@ async def run_build_agent_async(
 ) -> int:
     """Run a build agent in its dedicated git worktree."""
     worktree = _ensure_worktree(agent)
+
+    # Install dependencies so node_modules/.bin/tsc etc. are available.
+    # Without this, `npm run typecheck` fails because tsc is not in PATH
+    # and the agent wastes turns falling back to `npx tsc`.
+    node_modules = worktree / "node_modules"
+    if not node_modules.exists():
+        log.info("installing npm dependencies in worktree", agent=agent["name"], path=str(worktree))
+        result = subprocess.run(
+            ["npm", "install"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            log.warning("npm install failed in worktree", agent=agent["name"], stderr=result.stderr[:500])
+        else:
+            log.info("npm install complete", agent=agent["name"])
+
     agent_log = run_log_dir / f"{agent['name']}.log"
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(executor, run_agent, agent, game, worktree, agent_log, client)
