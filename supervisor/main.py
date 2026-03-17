@@ -1385,10 +1385,11 @@ async def run_build_agent_async(
     if not node_modules.exists():
         log.info("installing npm dependencies in worktree", agent=agent["name"], path=str(worktree))
         result = subprocess.run(
-            ["npm", "install"],
+            "npm install",
             cwd=worktree,
             capture_output=True,
             text=True,
+            shell=True,  # required on Windows: npm is npm.cmd, not a plain executable
         )
         if result.returncode != 0:
             log.warning("npm install failed in worktree", agent=agent["name"], stderr=result.stderr[:500])
