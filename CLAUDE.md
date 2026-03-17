@@ -61,7 +61,7 @@ python main.py
 
 ### Agent Architecture
 
-This project is built by a swarm of Claude Code agents, all orchestrated by a Python supervisor running locally. There is no Azure AI Foundry or external agent platform — every agent is a Claude Code headless instance (`claude -p`) with specialized instructions and tool permissions.
+This project is built by a swarm of Claude Code agents, all orchestrated by a Python supervisor running locally. There is no Azure AI Foundry or external agent platform — every agent runs a tool-use loop via the Anthropic SDK with specialized instructions and tool permissions.
 
 #### Agent Tiers
 
@@ -88,10 +88,11 @@ This project is built by a swarm of Claude Code agents, all orchestrated by a Py
 #### Agent Tool Permissions
 - Design agents: `Read, Write, Edit` (read specs, write documents to `docs/` only)
   - Exception: Asset Creation Agent gets `Read, Write, Edit` with write access to `games/<game>/src/assets/` only
-- Build agents: `Read, Write, Edit, Bash` (full development access within their worktree)
+- Build agents: `Read, Write, Edit, Bash, Glob, Grep` (full development access within their worktree)
 - Quality agents: `Read, Grep, Glob` (read-only review, no code changes)
   - Exception: QA agent gets `Read, Write, Edit, Bash` (writes tests and runs them)
   - Exception: Security agent gets `Read, Grep, Glob, Bash` (runs `npm audit`)
+- Patch agent: `Read, Write, Edit, Bash, Glob` (targeted fixes to an already-built game; runs in main repo, no worktree)
 
 #### Agent Isolation Rules
 - Build agents work in separate git worktrees to prevent conflicts
@@ -103,7 +104,7 @@ This project is built by a swarm of Claude Code agents, all orchestrated by a Py
 #### Supervisor Operation
 The supervisor (`supervisor/main.py`) orchestrates agents via the Anthropic SDK:
 1. Design tier runs sequentially (each depends on the previous output):
-   - game-design → art-direction → curriculum → **assets** (new)
+   - game-design → art-direction → sound-direction → curriculum → **assets**
    - The art-direction agent receives reference images from `docs/references/<game>/` injected directly into its context as base64 image blocks — it literally sees the images, not just text descriptions
    - The assets agent writes `SpriteFactory.ts` to master before build agents start
 2. Build tier runs in five phases (DevEx → Coordinator → Engine → Gameplay+Math parallel → Integration)
@@ -135,25 +136,14 @@ All math problems in every game come from this library — never from hardcoded 
 ### Parallel Agent Workflow
 When multiple agents work simultaneously, each uses a **separate git worktree** so there are no branch conflicts. Each agent's work lives on its own feature branch. The supervisor creates worktrees before spawning build agents:
 ```bash
-git worktree add ../agent-1-engine feature/game-engine
-git worktree add ../agent-2-gameplay feature/gameplay-mechanics
-git worktree add ../agent-3-math feature/math-engine
+git worktree add ../agent-engine feature/game-engine
+git worktree add ../agent-gameplay feature/gameplay-mechanics
+git worktree add ../agent-math feature/math-engine
 ```
 
 ### Visual References
 
 Before running the design tier on any game, the Creative Director drops reference images into `docs/references/<game-name>/`. The art direction agent receives these images injected directly into its API context — it sees the actual pixels, not text descriptions.
-
-**Naming convention** — use descriptive, kebab-case filenames so agents understand what each file shows without a manifest:
-```
-docs/references/missile-command-math/
-  playfield-layout-sketch.jpg          ← hand-drawn or digital layout sketch
-  missile-command-1980-screenshot.png  ← original Atari cabinet reference
-  explosion-palette-ref.png            ← color reference for explosions
-  city-silhouette-style-ref.jpg        ← skyline silhouette style
-  hud-layout-ref.jpg                   ← HUD bar composition reference
-  missile-command-1980-screenshot.png  ← overall mood / color temperature
-```
 
 **What to include:** Sketches, screenshots of reference games, mood images, color palette photos, pixel art samples you like the look of, UI composition references.
 
@@ -180,8 +170,8 @@ explosion-palette-ref.png — The pastel lavender/mint/gold explosion palette I 
 - JSDoc on all public functions
 - Named constants for all magic numbers
 - All player-visible text must be extractable for localization (no inline strings in render logic)
-- Mobile-first: every feature must work on touch screens
-- Target 60fps on a 3-year-old mid-range Android phone
+- Web-first design, to be mainly use on broswers, so the game should scale with window size
+- Mobile 2nd: every feature must work on touch screens, target 60fps on a 3-year-old mid-range Android phone
 - Game state during gameplay lives in memory only — see the localStorage Policy section for exactly what is and is not permitted
 - **Never use raw string literals for sprite or animation keys.** Always import `SPRITE_KEYS` and `ANIM_KEYS` from `src/assets` and reference keys through those consts. A typo in a raw string is a silent runtime failure; a typo in a const reference is a compile error caught before the game runs.
 
@@ -197,57 +187,6 @@ explosion-palette-ref.png — The pastel lavender/mint/gold explosion palette I 
 - **ALLOWED** for: high score persistence (arcade-style 3-letter initials + score), user settings (sound volume, preferred difficulty), accessibility preferences (reduced motion, high contrast mode)
 - **NOT ALLOWED** for: saving mid-game state, storing any personally identifiable information, tracking gameplay behavior across sessions, or any data that could identify a specific child
 
-## Future Considerations
-
-These features are not in scope for the current build but should inform architectural decisions made today. Do not implement any of these without explicit Creative Director approval. When in doubt, design current code so it does not foreclose these options.
-
-### Azure AI Foundry Integration
-
-The current architecture uses all-Claude Code agents for simplicity and learning velocity. A future iteration may migrate non-coding agents (design tier, quality tier) to Azure AI Foundry Agent Service for:
-- Enterprise RBAC and audit trails
-- Persistent agent memory via conversation threads
-- OpenAPI tool connections to external services (SAST scanners, CI systems)
-- Multi-model support (GPT-4o for some roles, Claude for others)
-- SOC 2 / FedRAMP compliance for enterprise deployments
-
-Design the supervisor's agent interface so the underlying provider (Claude Code subprocess vs. Azure AI Foundry API) can be swapped without rewriting orchestration logic. Use an abstract `Agent` base class with `run(task)` → `AgentResult` contract.
-
-### Backend & Cloud Infrastructure
-
-The current architecture is intentionally client-only (GitHub Pages, no server). A future backend would introduce:
-
-- **API layer** — A REST or GraphQL service (e.g. Node/Express, or a managed platform like Azure App Service) that games call to submit scores and progress events. Game code must remain decoupled from any specific API shape — use a thin `ApiClient` adapter so the transport can be swapped without touching game logic.
-- **Authentication** — Student accounts (likely via a school SSO / OAuth provider such as Google Classroom or Clever). Design game identity (`studentId`) as an opaque string from day one so the source can change.
-- **Database** — A relational store (e.g. PostgreSQL on Azure) for student records, scores, and progress snapshots. The local `shared/analytics` schema should mirror what would eventually be sent upstream.
-- **Infrastructure as Code** — When a backend is introduced, all cloud resources should be defined in Terraform or Azure Bicep. Do not manually configure production infrastructure.
-
-### Leaderboard Service
-
-- Per-game, per-grade, and per-skill leaderboards with opt-in participation (COPPA compliance required for under-13 users).
-- Score submissions must be idempotent — design `ScoreManager` events to carry a client-generated session UUID so duplicate submissions are safe to ignore server-side.
-- Leaderboards should degrade gracefully: if the backend is unreachable, the game still runs and scores are queued locally for later sync.
-
-### Student Progress Tracking Across Devices
-
-- Cloud sync of the data currently stored locally by `shared/analytics`.
-- Progress should be keyed by `studentId`, not device — the local store becomes a write-ahead cache that syncs on connectivity.
-- Offline-first architecture: use a sync queue (e.g. background fetch or service worker) so play sessions on a Chromebook, tablet, and phone all converge.
-
-### Parent Dashboard
-
-- A separate web application (outside this monorepo, or in a new `apps/` workspace) that reads from the same backend.
-- Read-only view of a child's progress: skills mastered, time played, problem accuracy by grade standard.
-- No game logic lives in the dashboard — it consumes the same API the games write to.
-- Must meet COPPA / FERPA requirements: parental consent gates, data deletion on request, no third-party sharing.
-
-### Agents' Responsibilities Now
-
-- Keep `shared/analytics` events well-typed and versioned (`{ event, version, payload }`) — this is the contract the future sync layer will consume.
-- Never couple game scenes directly to `localStorage` or any persistence layer — always go through `ScoreManager` / `AnalyticsManager` so the backing store can be swapped.
-- Document any decision that would be hard to reverse once a backend exists in `docs/adrs/`.
-
----
-
 ## Critical Rules — Never Do These
 
 - **No external network calls.** No analytics, tracking, or any outbound HTTP from game code.
@@ -259,3 +198,6 @@ The current architecture is intentionally client-only (GitHub Pages, no server).
 - **No cross-game imports.** Shared code lives in `/shared/`. Games never import from each other.
 - **No modifying source code from quality tier agents.** Quality agents produce reports only. The QA agent may write test files but never modifies game source code.
 - **No agent runs exceeding 50 turns.** If a task requires more, decompose it into smaller tasks.
+- **Keep `shared/analytics` events well-typed and versioned** (`{ event, version, payload }`) — this is the contract a future sync layer will consume.
+- **Never couple game scenes directly to `localStorage`** or any persistence layer — always go through `ScoreManager` / `AnalyticsManager` so the backing store can be swapped.
+- **Document hard-to-reverse decisions** in `docs/adrs/` — especially anything that would be difficult to change once a backend or second game exists.
