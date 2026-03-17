@@ -1,11 +1,15 @@
 {
   "name": "@arcade-swarm/analytics",
   "version": "0.1.0",
-  "description": "Local-only learning progress tracking for Arcade Swarm games. No external network calls — all data stays on device.",
+  "description": "Local-only progress tracking and analytics for Arcade Swarm games. No external network calls.",
   "type": "module",
-  "main": "index.js",
+  "main": "src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
-    ".": "./index.js"
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
   },
   "scripts": {
     "test": "vitest",
@@ -13,8 +17,8 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "vitest": "^2.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
   },
-  "keywords": ["analytics", "progress-tracking", "local-only", "arcade-swarm"]
+  "keywords": ["analytics", "local", "privacy", "arcade-swarm"]
 }

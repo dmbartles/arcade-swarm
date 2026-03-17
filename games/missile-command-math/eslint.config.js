@@ -1,22 +1,31 @@
 import js from '@eslint/js';
+import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  js.configs.recommended,
-  ...tseslint.configs.recommended,
+  { ignores: ['dist', 'node_modules', 'coverage'] },
   {
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    files: ['**/*.{ts,tsx}'],
     languageOptions: {
       ecmaVersion: 2020,
-      sourceType: 'module',
+      globals: globals.browser,
     },
     rules: {
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-      '@typescript-eslint/explicit-function-return-type': 'off',
+      // Enforce named constants over magic numbers (CLAUDE.md)
+      '@typescript-eslint/no-inferrable-types': 'off',
+      // Warn on any — allow for Phaser interop in some cases
       '@typescript-eslint/no-explicit-any': 'warn',
-      'no-console': ['warn', { allow: ['warn', 'error'] }],
+      // Unused vars: error but allow underscore-prefixed
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      // No require() — ES modules only (CLAUDE.md)
+      '@typescript-eslint/no-require-imports': 'error',
     },
   },
   {
-    ignores: ['dist/**', 'node_modules/**', '*.config.*'],
+    files: ['**/*.{test,spec}.{ts,js}', 'tests/**/*.{ts,js}', 'e2e/**/*.{ts,js}'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
   },
 );

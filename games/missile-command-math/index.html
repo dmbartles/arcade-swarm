@@ -2,20 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-    <meta name="description" content="Missile Command Math — defend cities by solving math problems! An educational arcade game for grades 3–5." />
-    <title>Missile Command Math</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0a0a0f" />
+    <meta name="description" content="Missile Command Math — an educational arcade game for grades 3–5" />
+    <!-- Prevent iOS from treating phone numbers as links -->
+    <meta name="format-detection" content="telephone=no" />
+    <!-- Prevent flash of unstyled content -->
     <style>
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
+        background: #0a0a0f;
         width: 100%;
         height: 100%;
         overflow: hidden;
-        background-color: #0a0a2e;
         touch-action: none;
       }
       #game-container {
@@ -25,7 +24,14 @@
         align-items: center;
         justify-content: center;
       }
+      /* Phaser canvas — responsive scaling handled by game config */
+      canvas {
+        display: block;
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
     </style>
+    <title>Missile Command Math</title>
   </head>
   <body>
     <div id="game-container"></div>

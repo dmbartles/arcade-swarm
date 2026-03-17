@@ -6,10 +6,10 @@
  * adjusts parameters at runtime based on the current level and global
  * difficulty setting.
  *
- * @see docs/gdds/missile-command-math.md §7 (Difficulty Progression)
+ * @see docs/gdds/missile-command-math.md §7 (Difficulty Scaling)
  */
 
-/** Global difficulty setting chosen by the player at game start (GDD §7.2). */
+/** Global difficulty setting chosen by the player at game start (GDD §Difficulty Scaling). */
 export type DifficultySetting = 'easy' | 'normal' | 'hard';
 
 /** Math problem complexity tier, driven by the current level. */
@@ -17,7 +17,7 @@ export type ProblemComplexity = 'easy' | 'medium' | 'hard';
 
 /**
  * The set of math skill types that can appear in a given level.
- * Derived from GDD §7.1 level-by-level progression table and §8.1 standards.
+ * Derived from GDD §Level Progression table.
  */
 export type MathSkillType =
   | 'addition'
@@ -38,39 +38,48 @@ export type MathSkillType =
   | 'mixed-operations';
 
 /**
- * Per-level configuration derived from the GDD §7.1 level table.
- * Each level (1–10) has one of these defining what threats and math appear.
+ * Per-level configuration derived from the GDD §Level Progression table.
+ * Each level (0–20) has one of these defining what threats and math appear.
  */
 export interface ILevelConfig {
-  /** Level number (1–10). */
+  /** Level number (0–20). Level 0 = training. */
   level: number;
 
-  /** Narrative year for the interstitial card (1981–1987). */
-  year: number;
+  /** Human-readable skill description. */
+  skillType: string;
+
+  /** CCSS standard codes active for this level (e.g. "2.OA.B.2"). */
+  ccssStandards: string[];
 
   /** Math skill types active for this level. */
   mathTypes: MathSkillType[];
 
-  /** Maximum number of threats on screen simultaneously. */
-  maxSimultaneousThreats: number;
+  /** Difficulty label for the level. */
+  difficulty: 'Tutorial' | 'Intro' | 'Easy' | 'Medium' | 'Hard' | 'Expert';
 
-  /** Whether strategic bombers can spawn this level (Level 6+). */
+  /** Maximum number of simultaneous on-screen bombs. */
+  maxSimultaneous: number;
+
+  /** Whether strategic bombers can spawn this level (Level 13+). */
   bomberEnabled: boolean;
 
-  /** Whether paratrooper transports can spawn this level (Level 7+). */
-  paratrooperEnabled: boolean;
-
-  /** Whether MIRVs can spawn this level (Level 8+). */
-  mirvEnabled: boolean;
-
-  /** Base speed multiplier for missile descent (0.5–1.5, GDD §7.1). */
+  /** Base speed multiplier for bomb descent (0.4×–1.2×, GDD §Level Progression). */
   baseSpeedMultiplier: number;
 
-  /** Total number of problems/threats in the wave (10–28, GDD §7.1). */
-  problemsInWave: number;
+  /** Total number of enemy threats in the wave. */
+  enemyCount: number;
 
-  /** Soft time limit in seconds for the wave (120–210, GDD §7.1). */
+  /**
+   * Soft time limit in seconds for the wave.
+   * Unlimited (Infinity) for Level 0 (training).
+   */
   timeLimitSeconds: number;
+
+  /**
+   * Special rules for this level (free-form description).
+   * E.g. "Cannot fail; loops until 1 success; no score".
+   */
+  specialRule?: string;
 }
 
 /**
@@ -78,7 +87,7 @@ export interface ILevelConfig {
  * Combines the per-level config with the player's global difficulty setting.
  */
 export interface IDifficultyConfig {
-  /** Current level number (1–10). */
+  /** Current level number (0–20). */
   level: number;
 
   /** Global difficulty setting chosen by the player. */
@@ -86,8 +95,8 @@ export interface IDifficultyConfig {
 
   /**
    * Effective missile speed multiplier.
-   * Computed as: levelConfig.baseSpeedMultiplier × difficultySpeedMultiplier.
-   * Example: Level 5 (0.9) on Hard (1.3) = 1.17.
+   * Computed as: levelConfig.baseSpeedMultiplier × difficultyPresetMultiplier.
+   * Example: Level 13 (0.9×) on Hard (1.3×) = 1.17×.
    */
   missileSpeedMultiplier: number;
 
@@ -106,58 +115,38 @@ export interface IDifficultyConfig {
   /** Maximum simultaneous on-screen threats. */
   maxSimultaneousThreats: number;
 
-  /** Whether bombers are active this level. */
+  /** Whether bombers are active this level (Level 13+). */
   bomberEnabled: boolean;
-
-  /** Whether paratroopers are active this level. */
-  paratrooperEnabled: boolean;
-
-  /** Whether MIRVs are active this level. */
-  mirvEnabled: boolean;
 
   /** Total problems in the current wave. */
   problemsInWave: number;
 
-  /** Hit points per city (default: 3, GDD §7.3). */
-  cityHitPoints: number;
-
-  /** Player explosion blast radius in pixels (default: 80, GDD §5.3). */
-  explosionRadius: number;
-
-  /** Chain reaction blast radius in pixels (default: 60, GDD §5.3). */
-  chainReactionRadius: number;
-
-  /** MIRV split altitude as a percentage of screen height (default: 40, GDD §5.2). */
-  mirvSplitAltitudePercent: number;
-
-  /** Number of answer queue items visible at once (default: 6, GDD §10 Q1). */
-  queueVisibleCount: number;
-
   /**
-   * Bomber bonus problem must appear within the next N queue rounds (GDD §7.3).
-   * Default: 3.
+   * Launcher reload delay in milliseconds.
+   * Range: 400–800 ms (GDD §Difficulty Scaling).
+   * Decreases on higher difficulty presets.
    */
-  bomberQueueConstraint: number;
-
-  /** Number of child warheads a MIRV spawns on split (GDD §5.2: 2–3). */
-  mirvChildCount: number;
-
-  /** Number of payload missiles a bomber drops (GDD §7: 2–3). */
-  bomberPayloadCount: number;
+  launcherReloadDelayMs: number;
 
   /**
-   * Soft time limit in seconds for the wave (GDD §7.1).
-   * Governs max spawn window; wave ends when all threats resolved or cities fall.
+   * Bomber speed multiplier (Level 13+ only).
+   * Range: 0.84×–1.56×. Computed as 1.2× × difficultyPresetMultiplier.
+   */
+  bomberSpeedMultiplier: number;
+
+  /**
+   * Soft time limit in seconds for the wave (GDD §Level Progression).
+   * Unlimited (Infinity) for Level 0 (training).
    */
   timeLimitSeconds: number;
 }
 
-/** Speed multiplier map for the global difficulty selector (GDD §7.2). */
+/** Speed multiplier map for the global difficulty selector (GDD §Difficulty Scaling). */
 export interface IDifficultySpeedMap {
-  /** Recommended for Grade 3 / younger players. */
-  easy: number;   // 0.7
-  /** Default. Recommended for Grade 4. */
-  normal: number; // 1.0
-  /** Recommended for Grade 5 / challenge seekers. */
-  hard: number;   // 1.3
+  /** Recommended for Grade 3 / younger players. 0.7× multiplier. */
+  easy: number;
+  /** Default. Recommended for Grade 4. 1.0× multiplier. */
+  normal: number;
+  /** Recommended for Grade 5 / challenge seekers. 1.3× multiplier. */
+  hard: number;
 }

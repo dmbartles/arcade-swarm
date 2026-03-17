@@ -50,13 +50,10 @@ export interface IScoreManager {
 
   /**
    * Calculate the star rating for the current wave state (GDD §3).
-   *   - 3 stars: All 6 cities survive (+ bomber intercepted if applicable)
-   *   - 2 stars: 4–5 cities survive
-   *   - 1 star:  1–3 cities survive
+   *   - 3 stars: ≥ 5 buildings survive; accuracy ≥ 90% and speed bonus earned
+   *   - 2 stars: ≥ 3 buildings survive; accuracy ≥ 70%
+   *   - 1 star:  ≥ 1 building survives; accuracy < 70%
    *   - 0 stars: All cities destroyed (game over)
-   *
-   * Stars are influenced by: cities surviving (primary), chain reactions
-   * achieved, bomber interceptions, and accuracy percentage.
    *
    * @param citiesSurviving - Number of cities still standing (0–6).
    * @returns Star rating (0–3). 0 if all cities destroyed.
@@ -86,13 +83,13 @@ export interface StreakMilestonePayload {
 
 /** Base point values for scoring actions (GDD §6 Scoring Model). */
 export interface IScoreValues {
-  /** Standard missile intercepted: +10. */
+  /** Standard bomb destroyed: +10. */
   standardMissile: number;
-  /** City-save bonus when a threatening missile is intercepted: +25. */
+  /** Bomb destroyed with speed bonus (> 50% time remaining): +25. */
   citySaveBonus: number;
-  /** Bomber intercepted before payload drop: +100. */
+  /** Strategic bomber intercepted (before any drops): +100. */
   bomberBeforeDrop: number;
-  /** Bomber destroyed after payload drop: +40. */
+  /** Strategic bomber intercepted (mid-payload, ≥ 1 bomb already dropped): +50. */
   bomberAfterDrop: number;
   /** MIRV intercepted before split: +60. */
   mirvBeforeSplit: number;
@@ -102,4 +99,8 @@ export interface IScoreValues {
   paratrooper: number;
   /** Chain reaction bonus per additional link beyond 1st: +20. */
   chainReactionLink: number;
+  /** All bombs in wave cleared without a miss: +50 wave bonus. */
+  perfectWaveBonus: number;
+  /** Building survives to level end: +15 per building. */
+  buildingSurvivedBonus: number;
 }
