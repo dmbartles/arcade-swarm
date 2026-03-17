@@ -678,6 +678,7 @@ GAMEPLAY_AGENT = {
     "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
     "model": BUILD_MODEL,
     "max_tokens": BUILD_MAX_TOKENS,
+    "timeout_seconds": 900,  # ~18 entity files + typecheck rounds; 15 min is safe headroom
     "preload": [
         "CLAUDE.md",
         "docs/gdds/{game}.md",
@@ -703,6 +704,7 @@ MATH_AGENT = {
     "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
     "model": BUILD_MODEL,
     "max_tokens": BUILD_MAX_TOKENS,
+    "timeout_seconds": 900,  # generators + MathEngine.ts + DifficultyManager.ts; 15 min headroom
     "preload": [
         "CLAUDE.md",
         "docs/gdds/{game}.md",
@@ -819,7 +821,7 @@ BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
 _PHASE4_MERGE_AGENTS = PARALLEL_CODING_AGENTS
 
 # Ordered build phase names — used for start_after / stop_after comparisons.
-_BUILD_PHASE_ORDER = ["devex", "coordinator", "engine"]
+_BUILD_PHASE_ORDER = ["devex", "coordinator", "engine", "gameplay"]
 
 
 def _phase_skipped(phase: str, start_after: str | None) -> bool:
@@ -1548,24 +1550,27 @@ async def run_build_tier_async(
     # Worktrees branch from updated master (type stubs + build plans + engine code).
     # Merges gameplay + math into master; cleans up all worktrees.
     # -------------------------------------------------------------------------
-    log.info("=== Build Tier -- Phase 4: Gameplay + Math (parallel) ===")
-    loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor(max_workers=len(PARALLEL_CODING_AGENTS)) as executor:
-        tasks = [
-            run_build_agent_async(agent, game, run_log_dir, executor, client)
-            for agent in PARALLEL_CODING_AGENTS
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    if _phase_skipped("gameplay", start_after):
+        log.info("=== Build Tier -- Phase 4: Gameplay + Math (SKIPPED via --start-after) ===")
+    else:
+        log.info("=== Build Tier -- Phase 4: Gameplay + Math (parallel) ===")
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(max_workers=len(PARALLEL_CODING_AGENTS)) as executor:
+            tasks = [
+                run_build_agent_async(agent, game, run_log_dir, executor, client)
+                for agent in PARALLEL_CODING_AGENTS
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for agent, result in zip(PARALLEL_CODING_AGENTS, results):
-        if isinstance(result, Exception) or result != 0:
-            log.error("coding agent failed", name=agent["name"], result=str(result))
+        for agent, result in zip(PARALLEL_CODING_AGENTS, results):
+            if isinstance(result, Exception) or result != 0:
+                log.error("coding agent failed", name=agent["name"], result=str(result))
+                raise SystemExit(1)
+        log.info("gameplay and math agents complete -- merging branches")
+
+        if not merge_build_branches(run_log_dir):
             raise SystemExit(1)
-    log.info("gameplay and math agents complete -- merging branches")
-
-    if not merge_build_branches(run_log_dir):
-        raise SystemExit(1)
-    log.info("all branches merged -- proceeding to integration")
+        log.info("all branches merged -- proceeding to integration")
 
     # -------------------------------------------------------------------------
     # Phase 5: Integration -- runs in main repo after merge.

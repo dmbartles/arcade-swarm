@@ -89,12 +89,15 @@ You have at most **50 turns**. Spend them wisely:
 
 | Turns | Activity |
 |-------|----------|
-| 1–3   | `Glob` existing files in your ownership directories. Use `Grep` to check what constants `src/config/` exports before writing imports. |
-| 4–10  | Write `shared/math-engine/` — generators and tests. Run `npm run test:run` from `shared/math-engine/`. |
+| 1     | `Glob("shared/math-engine/src/generators/**/*.ts")`. See the fast-path rule below. |
+| 2–3   | If generators missing: write them. If generators exist and tests fail: read only the failing file, fix it. |
+| 4–10  | Write remaining missing generators and tests. Run `npm run test:run` from `shared/math-engine/`. |
 | 11–35 | Write `MathEngine.ts` and `DifficultyManager.ts`. |
 | 36–45 | `npm run typecheck && npm run lint` from the game directory. Fix every error found. |
 | 46–49 | Re-run checks if any errors remain. |
 | 50    | Commit and report. |
+
+**Fast path — if generators already exist**: Run `npm run test:run` from `shared/math-engine/` on turn 2. Do **not** read the generator files. If all tests pass, jump straight to turn 11 (write `MathEngine.ts`). Only read a generator file if its test fails and you need to diagnose why.
 
 **If you reach turn 35 without having written all your files**, finish the most critical ones and move directly to typecheck. A working subset is better than a timeout.
 
@@ -118,9 +121,16 @@ Do not stop until every box is checked.
 
 Your build plan (`docs/build-plans/<game-name>-math.md`) is pre-loaded in your system prompt — start directly from it. Do not use the Read tool to re-read it.
 
-Use **Glob** to explore what other agents have created (e.g. `Glob("games/<game-name>/src/types/**")`).
-Use **Grep** to inspect `src/config/` exports before writing any import statements.
-Never run recursive Bash directory listings (`dir /s`, `find .`) — use Glob instead.
+Run `Glob("shared/math-engine/src/generators/**/*.ts")` on turn 1:
+- **Generators exist** → run `npm run test:run` from `shared/math-engine/` (turn 2). Do NOT read the generator files. If tests pass, jump to step 3 (MathEngine.ts). Only read a generator if its specific test fails.
+- **Generators missing** → write them per the curriculum map (turns 2–10).
+
+**Never Read these files** — they don't affect your output:
+- `package.json`, `tsconfig*.json`, `vite.config.ts`, `eslint.config.js` — DevEx-owned config
+- `src/types/**` — already pre-loaded in your system prompt; do not re-read
+- Any generator file that has passing tests — trust the test output
+
+Use **Grep** on `src/config/` **only** when you need a specific constant name. Never run recursive Bash directory listings — use Glob instead.
 
 Implement the full math and difficulty stack as specified in your build plan:
 

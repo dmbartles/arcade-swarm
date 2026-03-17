@@ -101,8 +101,15 @@ Do not stop until every box is checked.
 
 Your build plan (`docs/build-plans/<game-name>-gameplay.md`) is pre-loaded in your system prompt — start directly from it. Do not use the Read tool to re-read it.
 
-Use **Glob** to explore what other agents have created (e.g. `Glob("games/<game-name>/src/types/**")`).
-Use **Grep** to inspect `src/config/` exports before writing any import statements.
+Run `Glob("games/<game-name>/src/**/*")` once on turn 1 to confirm what the engine agent created, then **start writing immediately on turn 2**. Do not read files before writing.
+
+**Never Read these files** — they don't affect your output:
+- `package.json`, `tsconfig*.json`, `vite.config.ts`, `eslint.config.js`, `index.html` — DevEx-owned config
+- `src/main.ts` — engine-owned; irrelevant to entities
+- `src/types/**` — already pre-loaded in your system prompt; do not re-read
+- `src/assets/SpriteFactory.ts` — already pre-loaded; do not re-read
+
+Use **Grep** on `src/config/` **only** when you need a specific constant name — do not Read entire config files.
 Never run recursive Bash directory listings (`dir /s`, `find .`) — use Glob instead.
 
 Implement all gameplay entities and score management as specified in your build plan:
