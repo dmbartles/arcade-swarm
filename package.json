@@ -2,19 +2,20 @@
   "name": "arcade-swarm",
   "version": "0.1.0",
   "private": true,
-  "description": "Monorepo of educational HTML5 arcade games built with Phaser.js 3, aligned to Common Core math standards.",
+  "description": "Monorepo of educational HTML5 arcade games built with Phaser.js 3",
+  "type": "module",
   "workspaces": [
     "games/*",
     "shared/*"
   ],
   "scripts": {
+    "build": "npm run build --workspace=games/missile-command-math",
     "test": "npm run test --workspaces --if-present",
+    "test:run": "npm run test:run --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present"
   },
-  "engines": {
-    "node": ">=20.0.0",
-    "npm": ">=10.0.0"
+  "devDependencies": {
+    "typescript": "^5.4.0"
   }
 }

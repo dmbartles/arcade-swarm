@@ -1,177 +1,196 @@
 /**
- * IEntity — Contracts for all game entities in Missile Command Math.
+ * IEntity — Structural contracts for all Phaser GameObjects in the game.
  *
- * These interfaces define the public API surface for each entity type.
- * Entities are `Phaser.GameObjects.Container` subclasses (implemented by coding-2)
- * and are consumed by systems and scenes (implemented by coding-1 and coding-3).
+ * These interfaces define the *shape* that gameplay, engine, and math agents
+ * must conform to when implementing entities. They are the merge-time contract
+ * that prevents incompatible APIs between agents working in parallel worktrees.
  *
  * @see docs/gdds/missile-command-math.md §5 (Entity List)
  */
 
 import type { IMathProblem } from './IMathProblem';
+import type { ThreatType } from './GameEvents';
 
-// ── Base Threat ───────────────────────────────────────────────────────────
+// ── Threat Entities ──────────────────────────────────────────────────────────
 
-/** Common properties shared by all threat entities. */
+/**
+ * Base interface for all threat types (missiles, bombers, paratroopers, MIRVs).
+ * Every threat has a unique ID, a type discriminator, and an optional math problem.
+ */
 export interface IThreat {
   /** Unique runtime ID for this threat instance. */
   readonly threatId: string;
-  /** The math problem displayed on this threat (null for paratroopers). */
-  readonly problem: IMathProblem | null;
-  /** Index of the targeted city (0–5). */
-  readonly targetCityIndex: number;
-  /** Whether this threat has been destroyed. */
-  readonly destroyed: boolean;
-  /** Destroy the threat (trigger explosion and cleanup). */
+  /** Discriminated union type. */
+  readonly threatType: ThreatType;
+  /** Math problem attached to this threat (null for paratroopers). */
+  problem: IMathProblem | null;
+  /** Whether this threat is still active (not destroyed or escaped). */
+  isActive: boolean;
+  /** Destroy this threat (triggers THREAT_DESTROYED event). */
   destroy(): void;
 }
 
-// ── Missiles ──────────────────────────────────────────────────────────────
-
-/** Standard descending missile carrying a math problem. */
+/** Standard descending missile — the primary threat. */
 export interface IStandardMissile extends IThreat {
-  /** Current descent speed in pixels per second. */
-  readonly speed: number;
-  /** Whether the trajectory line to the target city is visible. */
-  trajectoryLineVisible: boolean;
+  readonly threatType: 'standard-missile';
+  /** Current descent speed in pixels/second. */
+  speed: number;
+  /** Index of the city this missile is targeting (0–5). */
+  targetCityIndex: number;
+  /** Whether this missile was intercepted (vs. hitting a city). */
+  wasIntercepted: boolean;
 }
 
-/** Missile dropped by a strategic bomber. */
-export interface IBomberMissile extends IStandardMissile {
-  /** Reference ID of the parent bomber that dropped this missile. */
-  readonly parentBomberId: string;
+/** Missile dropped from a strategic bomber. */
+export interface IBomberMissile extends IThreat {
+  readonly threatType: 'bomber-missile';
+  /** The bomber that spawned this missile. */
+  parentBomberId: string;
+  speed: number;
+  targetCityIndex: number;
+  wasIntercepted: boolean;
 }
 
-/** MIRV warhead that splits into children at a set altitude. */
-export interface IMIRVMissile extends IStandardMissile {
-  /** Altitude percentage (0–1) at which this MIRV splits. */
-  readonly splitAltitudePercent: number;
-  /** Number of child warheads spawned on split. */
-  readonly childCount: number;
-  /** Whether this MIRV has already split. */
-  readonly hasSplit: boolean;
+/** Multi-independently-targeted re-entry vehicle — splits at altitude. */
+export interface IMIRVMissile extends IThreat {
+  readonly threatType: 'mirv';
+  speed: number;
+  /** Screen-height percentage at which this MIRV splits. */
+  splitAltitudePercent: number;
+  /** Whether this MIRV has already split into children. */
+  hasSplit: boolean;
 }
 
-/** Child warhead spawned by a MIRV split. */
-export interface IMIRVChild extends IStandardMissile {
-  /** Reference ID of the parent MIRV. */
-  readonly parentMirvId: string;
+/** Child warhead spawned when a MIRV splits. */
+export interface IMIRVChild extends IThreat {
+  readonly threatType: 'mirv-child';
+  /** ID of the parent MIRV that spawned this child. */
+  parentMirvId: string;
+  speed: number;
+  targetCityIndex: number;
+  wasIntercepted: boolean;
 }
 
-// ── Bomber ────────────────────────────────────────────────────────────────
-
-/** Strategic bomber that flies horizontally and drops payload missiles. */
+/** Strategic bomber that traverses horizontally and drops payload missiles. */
 export interface IStrategicBomber extends IThreat {
-  /** Bonus problem attached to the bomber itself. */
-  readonly bonusProblem: IMathProblem;
-  /** Number of payload missiles to drop. */
-  readonly payloadCount: number;
-  /** Horizontal flight speed in pixels per second. */
-  readonly speed: number;
-  /** Direction of horizontal flight: 1 = right, -1 = left. */
-  readonly horizontalDir: 1 | -1;
-  /** Whether the bomber has already dropped its payload. */
-  readonly payloadDropped: boolean;
+  readonly threatType: 'bomber';
+  /** Horizontal traversal speed in pixels/second. */
+  speed: number;
+  /** Number of missiles still to be dropped (0 = payload exhausted). */
+  dropsRemaining: number;
+  /** Whether the bomber escaped off-screen without being destroyed. */
+  escaped: boolean;
 }
 
-// ── Paratrooper ───────────────────────────────────────────────────────────
-
-/** Transport plane that drops paratroopers. */
-export interface IParatrooperPlane {
-  /** Unique runtime ID. */
-  readonly planeId: string;
-  /** Horizontal flight speed in pixels per second. */
-  readonly speed: number;
-  /** Number of paratroopers to drop. */
-  readonly dropCount: number;
-  /** Direction of horizontal flight: 1 = right, -1 = left. */
-  readonly horizontalDir: 1 | -1;
+/** Paratrooper transport plane — drops paratroopers onto cities. */
+export interface IParatrooperPlane extends IThreat {
+  readonly threatType: 'paratrooper-transport';
+  speed: number;
+  /** Number of paratroopers still to be dropped. */
+  dropsRemaining: number;
+  escaped: boolean;
 }
 
-/** Paratrooper descending toward a city; neutralised only by blast radius. */
-export interface IParatrooper {
-  /** Unique runtime ID. */
-  readonly paratrooperId: string;
-  /** Descent speed in pixels per second. */
-  readonly descentSpeed: number;
-  /** Index of the targeted city (0–5). */
-  readonly targetCityIndex: number;
-  /** Whether this paratrooper has been neutralised by an explosion. */
-  readonly neutralised: boolean;
-  /** Whether this paratrooper has landed on its target city. */
-  readonly landed: boolean;
+/** Individual paratrooper descending toward a city. */
+export interface IParatrooper extends IThreat {
+  readonly threatType: 'paratrooper';
+  /** ID of the transport plane that dropped this paratrooper. */
+  parentTransportId: string;
+  /** Descent speed in pixels/second. */
+  descentSpeed: number;
+  /** Index of the city being targeted (0–5). */
+  targetCityIndex: number;
+  /** Whether this paratrooper landed successfully (vs. intercepted). */
+  landed: boolean;
 }
 
-// ── Launcher & Answer Queue ───────────────────────────────────────────────
+// ── Launcher Entity ──────────────────────────────────────────────────────────
 
-/** The player's bottom-center launcher loaded with an answer queue. */
+/**
+ * Player launcher — fires interceptors toward tapped threats.
+ * One of three launchers: left, center, or right.
+ */
 export interface ILauncher {
-  /** The answer currently loaded and ready to fire. */
-  readonly loadedAnswer: number | string | null;
-  /** Whether the launcher is locked (cooldown after firing or wrong tap). */
-  readonly locked: boolean;
-  /** Lock duration in milliseconds after a wrong tap. */
-  readonly lockDurationMs: number;
-  /** Fire at a specific threat. Returns true if the answer matched. */
-  fireAt(threatId: string): boolean;
+  /** Launcher position on the HUD bar. */
+  readonly position: 'left' | 'center' | 'right';
+  /** Current answer loaded (shown on launcher face). */
+  loadedAnswer: number | string | null;
+  /** Whether the launcher is currently reloading. */
+  isReloading: boolean;
+  /** Fire an interceptor toward the given world-space target. */
+  fire(targetX: number, targetY: number): void;
+  /** Load a new answer onto this launcher face. */
+  loadAnswer(answer: number | string): void;
 }
 
-/** Visual answer queue strip showing upcoming rounds. */
+// ── Answer Queue Entity ──────────────────────────────────────────────────────
+
+/**
+ * The scrolling answer queue (HUD element showing upcoming correct answers).
+ * Provides the contract between the MathEngine's wave problem set and
+ * the launcher loading system.
+ */
 export interface IAnswerQueue {
-  /** All remaining answer rounds, in order. */
-  readonly rounds: ReadonlyArray<number | string>;
-  /** Number of upcoming rounds visible to the player. */
-  readonly visibleAheadCount: number;
-  /** Whether the highlight assist feature is enabled. */
-  highlightAssistEnabled: boolean;
-  /** Advance to the next answer round (called on correct answer). */
+  /** Full ordered queue of correct answers for the current wave. */
+  readonly queue: ReadonlyArray<number | string>;
+  /** Index of the currently active (front-of-queue) answer. */
+  readonly currentIndex: number;
+  /** The answer currently at the front of the queue (loaded on launcher). */
+  readonly currentAnswer: number | string | null;
+  /** Advance the queue by one position. */
   advance(): void;
-  /** Get the currently loaded (first) answer. */
-  getCurrentAnswer(): number | string | null;
+  /** Whether the queue is exhausted (all problems answered). */
+  readonly isExhausted: boolean;
 }
 
-// ── Explosion ─────────────────────────────────────────────────────────────
+// ── Explosion Entity ──────────────────────────────────────────────────────────
 
-/** Explosion effect that can trigger chain reactions. */
+/** Expanding starburst explosion spawned on interceptor detonation. */
 export interface IExplosion {
-  /** Blast radius in pixels for direct hit detection. */
+  /** World-space X position of explosion centre. */
+  readonly x: number;
+  /** World-space Y position of explosion centre. */
+  readonly y: number;
+  /** Maximum blast radius in pixels. */
   readonly radius: number;
-  /** Chain reaction radius — threats within this range are also destroyed. */
-  readonly chainRadius: number;
-  /** Duration of the explosion animation in milliseconds. */
+  /** Total animation duration in milliseconds. */
   readonly durationMs: number;
-  /** World position of the explosion center. */
-  readonly position: { readonly x: number; readonly y: number };
+  /** The equation that was solved (shown in the explosion burst). */
+  readonly solvedEquation: string | null;
+  /** Whether this is a chain reaction explosion (smaller, no equation label). */
+  readonly isChainReaction: boolean;
 }
 
-// ── City ──────────────────────────────────────────────────────────────────
+// ── City Entity ───────────────────────────────────────────────────────────────
 
-/** A defended city at the bottom of the screen. */
+/** A city that the player must protect. Six cities total (two clusters of three). */
 export interface ICity {
-  /** City slot index (0–5, left to right). */
+  /** City index (0–5). 0–2 = left cluster, 3–5 = right cluster. */
   readonly cityIndex: number;
-  /** Display name of the city. */
-  readonly name: string;
-  /** Current hit points remaining. */
-  readonly hitPoints: number;
-  /** Maximum hit points. */
-  readonly maxHitPoints: number;
-  /** Whether this city is fully destroyed (0 HP). */
-  readonly destroyed: boolean;
+  /** Display name of this city. */
+  readonly cityName: string;
+  /** Which cluster this city belongs to. */
+  readonly cluster: 'left' | 'right';
+  /** Remaining hit points (0 = destroyed). */
+  hitPoints: number;
+  /** Whether this city is fully destroyed. */
+  readonly isDestroyed: boolean;
   /** Apply damage to this city. */
-  takeDamage(amount: number): void;
-  /** Rebuild the city to full HP (between levels). */
+  hit(): void;
+  /** Rebuild this city (called between levels). */
   rebuild(): void;
 }
 
-// ── Trajectory Line ───────────────────────────────────────────────────────
+// ── Trajectory Line Entity ─────────────────────────────────────────────────
 
-/** Visual line from a missile to its target city. */
+/** Dotted trajectory trail showing a missile's descent path to its target city. */
 export interface ITrajectoryLine {
-  /** The threat this line tracks. */
+  /** The threat this trajectory belongs to. */
   readonly threatId: string;
-  /** The target city index (0–5). */
-  readonly targetCityIndex: number;
-  /** Whether the line is currently visible. */
+  /** Whether the trail is currently visible. */
   visible: boolean;
+  /** Update the trail to follow the threat's current position. */
+  update(currentX: number, currentY: number): void;
+  /** Destroy the trail graphic. */
+  destroy(): void;
 }

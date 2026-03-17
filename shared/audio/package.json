@@ -1,11 +1,15 @@
 {
   "name": "@arcade-swarm/audio",
   "version": "0.1.0",
-  "description": "Retro audio effect helpers for Arcade Swarm games. No Phaser or game-engine dependencies.",
+  "description": "Shared retro audio effects and sound management for Arcade Swarm games. Zero game-engine dependencies.",
   "type": "module",
-  "main": "index.js",
+  "main": "src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
-    ".": "./index.js"
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
   },
   "scripts": {
     "test": "vitest",
@@ -13,8 +17,8 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "vitest": "^2.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
   },
   "keywords": ["audio", "retro", "arcade-swarm"]
 }

@@ -74,7 +74,7 @@ export const GameEvents = {
   /** Fired when the wave starts (after interstitial dismissed). */
   WAVE_STARTED: 'wave-started',
 
-  /** Fired when all 10 levels are completed (INF Treaty victory). */
+  /** Fired when all 20 levels are completed (session victory). */
   SESSION_VICTORY: 'session-victory',
 
   // ── Training Events ─────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ export interface StarRatingUpdatedPayload {
 
 /** Payload for LEVEL_COMPLETE. */
 export interface LevelCompletePayload {
-  /** The level that was completed (1–10). */
+  /** The level that was completed (1–20). */
   level: number;
   /** Final star rating (1–3). */
   stars: number;
@@ -209,7 +209,7 @@ export interface LevelCompletePayload {
   accuracy: number;
   /** Total chain reactions triggered. */
   chainReactions: number;
-  /** Whether this was a perfect wave (all 6 cities intact). */
+  /** Whether this was a perfect wave (all cities intact). */
   perfectWave: boolean;
 }
 
@@ -223,7 +223,7 @@ export interface GameOverPayload {
 
 /** Payload for WAVE_STARTED. */
 export interface WaveStartedPayload {
-  /** The level number for this wave (1–10). */
+  /** The level number for this wave (0–20). */
   level: number;
   /** Total threats in this wave. */
   totalThreats: number;

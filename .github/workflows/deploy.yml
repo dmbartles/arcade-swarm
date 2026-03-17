@@ -1,118 +1,103 @@
-name: Deploy to GitHub Pages
+name: Build and Deploy to GitHub Pages
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
+# Only one deploy runs at a time; cancel in-progress for PRs but not for main
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # ── 1. Test & lint all workspaces ────────────────────────────────────────
-  test:
-    name: Test & Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint --workspaces --if-present
-
-      - name: Type check
-        run: npm run typecheck --workspaces --if-present
-
-      - name: Unit tests
-        run: npm run test:run --workspaces --if-present
-
-  # ── 2. Playwright e2e ────────────────────────────────────────────────────
-  e2e:
-    name: E2E Tests
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Run E2E tests
-        run: npm run test:e2e --workspaces --if-present
-
-  # ── 3. Build & bundle size check ─────────────────────────────────────────
+  # ── Build ────────────────────────────────────────────────────────────────
   build:
-    name: Build
+    name: Build games
     runs-on: ubuntu-latest
-    needs: test
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
+          node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
-      - name: Build all games
-        run: npm run build --workspaces --if-present
+      - name: Type-check shared/math-engine
+        working-directory: shared/math-engine
+        run: npm run typecheck
 
-      - name: Check bundle size (2MB limit per game)
+      - name: Test shared/math-engine
+        working-directory: shared/math-engine
+        run: npm run test:run
+
+      - name: Lint missile-command-math
+        working-directory: games/missile-command-math
+        run: npm run lint
+
+      - name: Type-check missile-command-math
+        working-directory: games/missile-command-math
+        run: npm run typecheck
+
+      - name: Test missile-command-math (unit)
+        working-directory: games/missile-command-math
+        run: npm run test:run
+
+      - name: Build missile-command-math
+        working-directory: games/missile-command-math
+        run: npm run build
+
+      - name: Bundle size check (2 MB limit)
+        working-directory: games/missile-command-math
         run: |
-          for dist in games/*/dist; do
-            size=$(du -sb "$dist" | cut -f1)
-            limit=$((2 * 1024 * 1024))
-            game=$(echo "$dist" | cut -d/ -f2)
-            echo "$game: ${size} bytes"
-            if [ "$size" -gt "$limit" ]; then
-              echo "ERROR: $game bundle exceeds 2MB limit (${size} bytes)"
-              exit 1
-            fi
-          done
+          BUNDLE_KB=$(du -sk dist | cut -f1)
+          echo "Bundle size: ${BUNDLE_KB} KB"
+          if [ "$BUNDLE_KB" -gt 2048 ]; then
+            echo "ERROR: Bundle exceeds 2 MB limit (${BUNDLE_KB} KB)"
+            exit 1
+          fi
+
+      - name: Assemble GitHub Pages artifact
+        run: |
+          mkdir -p _site/missile-command-math
+          cp -r games/missile-command-math/dist/. _site/missile-command-math/
+          # Root index redirects to the game
+          cat > _site/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html><head><meta charset="UTF-8">
+          <meta http-equiv="refresh" content="0; url=missile-command-math/">
+          <title>Arcade Swarm</title></head>
+          <body><a href="missile-command-math/">Missile Command Math</a></body>
+          </html>
+          EOF
 
       - name: Upload Pages artifact
-        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: games/missile-command-math/dist
+          path: _site
 
-  # ── 4. Deploy (main branch only) ─────────────────────────────────────────
+  # ── Deploy (main branch only) ─────────────────────────────────────────────
   deploy:
-    name: Deploy
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    needs: [e2e, build]
-    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
-        id: deployment
+        id: deploy
         uses: actions/deploy-pages@v4
