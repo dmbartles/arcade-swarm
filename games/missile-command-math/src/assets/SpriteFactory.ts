@@ -140,6 +140,28 @@ function roundRect(
 }
 
 /**
+ * Register a sprite sheet from an HTMLCanvasElement.
+ *
+ * Phaser's TextureManager.addSpriteSheet() accepts HTMLImageElement or Texture,
+ * not HTMLCanvasElement directly. This helper registers the canvas as a
+ * CanvasTexture first (which extends Texture), then uses that texture object
+ * as the source for addSpriteSheet, and finally removes the intermediate entry.
+ */
+function addSheetFromCanvas(
+  scene: Phaser.Scene,
+  key: string,
+  canvas: HTMLCanvasElement,
+  frameWidth: number,
+  frameHeight: number,
+): void {
+  const tmpKey = `__tmp_sheet_${key}`;
+  const canvasTex = scene.textures.addCanvas(tmpKey, canvas);
+  if (!canvasTex) return;
+  scene.textures.addSpriteSheet(key, canvasTex, { frameWidth, frameHeight });
+  scene.textures.remove(tmpKey);
+}
+
+/**
  * Draw a launcher bell/bag silhouette into an existing canvas context.
  * The launcher is drawn at offset (ox, oy) within the canvas.
  * bodyColor — the fill for the launcher body.
@@ -372,10 +394,7 @@ export class SpriteFactory {
     // Frame 1 — normal orange
     drawLauncherShape(flashCtx, 80, 0, COLOR_LAUNCHER_ORANGE);
 
-    scene.textures.addSpriteSheet(SPRITE_KEYS.LAUNCHER_FLASH, flashCanvas, {
-      frameWidth: 80,
-      frameHeight: 90,
-    });
+    addSheetFromCanvas(scene, SPRITE_KEYS.LAUNCHER_FLASH, flashCanvas, 80, 90);
   }
 
   // ---------------------------------------------------------------------------
@@ -568,10 +587,7 @@ export class SpriteFactory {
       ctx.restore(); // globalAlpha
     }
 
-    scene.textures.addSpriteSheet(SPRITE_KEYS.EXPLOSION, canvas, {
-      frameWidth: FRAME_W,
-      frameHeight: FRAME_H,
-    });
+    addSheetFromCanvas(scene, SPRITE_KEYS.EXPLOSION, canvas, FRAME_W, FRAME_H);
   }
 
   // ---------------------------------------------------------------------------
@@ -757,10 +773,7 @@ export class SpriteFactory {
       ctx.restore();
     }
 
-    scene.textures.addSpriteSheet(SPRITE_KEYS.BUILDING_DAMAGED, canvas, {
-      frameWidth: FRAME_W,
-      frameHeight: FRAME_H,
-    });
+    addSheetFromCanvas(scene, SPRITE_KEYS.BUILDING_DAMAGED, canvas, FRAME_W, FRAME_H);
   }
 
   private static _registerBuildingDestroyed(scene: Phaser.Scene): void {
@@ -838,10 +851,7 @@ export class SpriteFactory {
       SpriteFactory._drawBomberFrame(ctx, ox, oy, propAngles[f]);
     }
 
-    scene.textures.addSpriteSheet(SPRITE_KEYS.BOMBER, canvas, {
-      frameWidth: FRAME_W,
-      frameHeight: FRAME_H,
-    });
+    addSheetFromCanvas(scene, SPRITE_KEYS.BOMBER, canvas, FRAME_W, FRAME_H);
   }
 
   private static _drawBomberFrame(
@@ -1116,10 +1126,7 @@ export class SpriteFactory {
       ctx.restore();
     }
 
-    scene.textures.addSpriteSheet(SPRITE_KEYS.FIREWORK_BURST, canvas, {
-      frameWidth: FRAME_W,
-      frameHeight: FRAME_H,
-    });
+    addSheetFromCanvas(scene, SPRITE_KEYS.FIREWORK_BURST, canvas, FRAME_W, FRAME_H);
   }
 
   private static _registerRebuildCrane(scene: Phaser.Scene): void {
@@ -1174,9 +1181,6 @@ export class SpriteFactory {
       ctx.restore();
     }
 
-    scene.textures.addSpriteSheet(SPRITE_KEYS.REBUILD_CRANE, canvas, {
-      frameWidth: FRAME_W,
-      frameHeight: FRAME_H,
-    });
+    addSheetFromCanvas(scene, SPRITE_KEYS.REBUILD_CRANE, canvas, FRAME_W, FRAME_H);
   }
 }
