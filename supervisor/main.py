@@ -129,7 +129,7 @@ SMOKE_MODEL   = "claude-haiku-4-5-20251001" # 2-turn API + file I/O connectivity
 # Tiered token limits
 # ---------------------------------------------------------------------------
 DESIGN_MAX_TOKENS  = 12_288   # structured templates cap output; 12k is generous headroom
-COORD_MAX_TOKENS   = 16_384   # three detailed build plan files
+COORD_MAX_TOKENS   = 32_768   # three detailed build plan files (same scale as code output)
 BUILD_MAX_TOKENS   = 32_768   # full game modules (Opus 4.6 supports 128K output)
 QUALITY_MAX_TOKENS = 8_192    # review reports
 SMOKE_MAX_TOKENS   = 4_096    # 2-turn smoke check
@@ -622,6 +622,7 @@ COORDINATOR_AGENT = {
     "tools": ["Read", "Write", "Glob"],
     "model": COORD_MODEL,
     "max_tokens": COORD_MAX_TOKENS,
+    "timeout_seconds": 900,  # 3 writes × ~4 min each; 15 min is safe headroom
     # All design docs + type stubs pre-loaded; coordinator won't need Read tool for them.
     "preload": [
         "CLAUDE.md",
@@ -859,8 +860,9 @@ def run_agent(
     Automatically retries up to MAX_RETRIES times on 429/529 errors with
     exponential back-off. All turns and tool calls are written to agent_log_file.
     """
-    model      = agent.get("model",      BUILD_MODEL)
-    max_tokens = agent.get("max_tokens", BUILD_MAX_TOKENS)
+    model           = agent.get("model",           BUILD_MODEL)
+    max_tokens      = agent.get("max_tokens",      BUILD_MAX_TOKENS)
+    timeout_seconds = agent.get("timeout_seconds", AGENT_TIMEOUT_SECONDS)
 
     # Load pre-injected reference documents (always read from REPO_ROOT)
     preloaded_content, preloaded_paths = _load_preload_docs(agent, game)
@@ -959,12 +961,12 @@ def run_agent(
 
         start_time = time.monotonic()
         while turn < MAX_TURNS:
-            if time.monotonic() - start_time > AGENT_TIMEOUT_SECONDS:
+            if time.monotonic() - start_time > timeout_seconds:
                 write(
-                    f"[{_ts()}] X FAILED: agent exceeded {AGENT_TIMEOUT_SECONDS}s "
+                    f"[{_ts()}] X FAILED: agent exceeded {timeout_seconds}s "
                     f"wall-clock timeout.\n"
                 )
-                log.error("agent hit wall-clock timeout", name=agent["name"], seconds=AGENT_TIMEOUT_SECONDS)
+                log.error("agent hit wall-clock timeout", name=agent["name"], seconds=timeout_seconds)
                 return 1
             turn += 1
             write(f"\n--- Turn {turn} | {_ts()} ---\n")
