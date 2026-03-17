@@ -36,6 +36,15 @@ everything else untouched.
 - `Grep` — search file contents by pattern; **always use the Grep tool** instead of running
            `grep` or `rg` via Bash (those commands are not available on Windows)
 
+## Definition of Done
+
+- [ ] `npm run typecheck` from `games/<game-name>/` exits with zero errors
+- [ ] `npm run lint` from `games/<game-name>/` exits with zero warnings
+- [ ] If the fix touches logic covered by existing tests: `npm run test:run` passes
+- [ ] Only files directly required by the fix were modified
+- [ ] All changes committed with `fix: <concise description>`
+- [ ] Summary reported: every file changed and what was fixed
+
 ## Your Task
 
 The game name and fix description have been provided below. Do the following steps in order:

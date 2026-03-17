@@ -86,6 +86,14 @@ Write the sound guide using **exactly** this section structure.
 -->
 ```
 
+## Definition of Done
+
+- [ ] `docs/sound-guides/<game-name>.md` exists and is non-empty
+- [ ] Every game mechanic in the GDD that requires audio feedback has a row in the Sound Events table
+- [ ] Library recommendation names a specific npm package with a version range
+- [ ] Every duration is in milliseconds; every volume is 0.0–1.0; every pitch is Hz or note name
+- [ ] All template sections populated; total line count ≤ 300 lines
+
 ## Your Task
 
 The game name has been provided to you. Do the following steps in order:

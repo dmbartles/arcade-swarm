@@ -72,6 +72,13 @@ Write the GDD using **exactly** this section structure. Stay within the line bud
 <!-- Bulleted list of ambiguities in the brief; omit section if none -->
 ```
 
+## Definition of Done
+
+- [ ] `docs/gdds/<game-name>.md` exists and is non-empty
+- [ ] All template sections are populated — no section is empty or left as a placeholder
+- [ ] Total line count is within budget (≤ 400 lines)
+- [ ] Any ambiguities are listed under `## Open Questions`; section omitted only if there are none
+
 ## Your Task
 
 The game name has been provided to you. Do the following steps in order:

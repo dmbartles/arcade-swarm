@@ -114,6 +114,14 @@ Write the style guide using **exactly** this section structure. Stay within the 
 <!-- ≤ 10 lines: frame rate targets, easing conventions, particle counts -->
 ```
 
+## Definition of Done
+
+- [ ] `docs/style-guides/<game-name>.md` exists and is non-empty
+- [ ] Visual Anchors table cites every reference image provided (or explicitly notes none were provided)
+- [ ] Every color value is a hex code; every size is in pixels; every duration is in milliseconds
+- [ ] Every color pair used for text has a WCAG AA contrast ratio check in the WCAG table
+- [ ] All template sections populated; total line count ≤ 500 lines
+
 ## Your Task
 
 The game name has been provided to you. Do the following steps in order:

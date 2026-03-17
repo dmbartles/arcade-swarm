@@ -32,3 +32,11 @@ You are the Accessibility Agent for Arcade Swarm. You review the codebase and ga
 - `Glob` — discover files matching patterns
 - `Grep` — search for ARIA roles, contrast values, and input handler patterns
 - `Write` — write review report to `docs/reviews/` only; never to `games/` or `shared/`
+
+## Definition of Done
+
+- [ ] Every item in the Review Checklist above has been evaluated and documented
+- [ ] All violations reference the specific WCAG 2.2 criterion and include file path and line number
+- [ ] Overall accessibility rating (Green / Yellow / Red) is stated at the top of the report
+- [ ] Report written to `docs/reviews/accessibility-<YYYY-MM-DD>.md`
+- [ ] No files outside `docs/reviews/` were written or modified

@@ -33,3 +33,11 @@ You are the Architecture Agent for Arcade Swarm. You perform a read-only review 
 - `Glob` — discover files matching patterns
 - `Grep` — search for patterns across the codebase
 - `Write` — write review report to `docs/reviews/` only; never to `games/` or `shared/`
+
+## Definition of Done
+
+- [ ] Every item in the Review Checklist above has been evaluated and documented
+- [ ] All violations include file path and line number
+- [ ] Overall coherence rating (Green / Yellow / Red) is stated at the top of the report
+- [ ] Report written to `docs/reviews/architecture-<YYYY-MM-DD>.md`
+- [ ] No files outside `docs/reviews/` were written or modified

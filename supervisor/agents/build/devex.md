@@ -157,3 +157,10 @@ The `src/types/` stubs are pre-loaded — check them before rewriting.
 6. Run `cd games/<game-name> && npm run typecheck`. Fix any errors.
 
 7. Commit: `git add -A && git commit -m "chore: scaffold build tooling and type interfaces for <game-name>"`
+
+## Definition of Done
+
+- [ ] All files in the ownership list exist (config files, type stubs, shared package stubs)
+- [ ] `npm run build` from `games/<game-name>/` exits cleanly (small bundle is expected)
+- [ ] `npm run typecheck` from `games/<game-name>/` exits with zero errors
+- [ ] All files committed with `chore: scaffold build tooling and type interfaces for <game-name>`

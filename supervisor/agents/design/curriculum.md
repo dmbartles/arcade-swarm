@@ -74,3 +74,10 @@ The game name has been provided to you. Do the following steps in order:
    - Keep total output ≤ 250 lines.
 
 The `skillType` values you define are the API contract for `shared/math-engine/`. Do not stop until the curriculum map file has been written.
+
+## Definition of Done
+
+- [ ] `docs/curriculum-maps/<game-name>.md` exists and is non-empty
+- [ ] All `skillType` values are kebab-case and match the GDD's described math content
+- [ ] Every grade × skillType combination has a row in the Grade-Level Skill Table
+- [ ] All template sections populated; total line count ≤ 250 lines

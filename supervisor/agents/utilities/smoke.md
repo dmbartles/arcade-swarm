@@ -29,3 +29,10 @@ game: <game-name>
 5. Report: "Smoke test passed. Read tool: OK. Write tool: OK. API connectivity: OK."
 
 Do nothing else. Do not read any other files. Do not create any other files.
+
+## Definition of Done
+
+- [ ] `CLAUDE.md` confirmed non-empty
+- [ ] `docs/briefs/<game-name>.md` confirmed non-empty
+- [ ] `docs/utilities/smoke-test.md` written with correct content and confirmed by read-back
+- [ ] Final report states: "Smoke test passed. Read tool: OK. Write tool: OK. API connectivity: OK."

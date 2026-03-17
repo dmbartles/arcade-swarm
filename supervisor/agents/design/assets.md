@@ -199,3 +199,12 @@ The game name has been provided to you. Do the following steps in order:
    - `SpriteFactory.registerAnimations()` — registers every Phaser animation; implements every Animations table row verbatim (key, frames, frameRate, repeat, yoyo)
 6. Write `games/<game-name>/src/assets/index.ts` re-exporting `SpriteFactory`, `SPRITE_KEYS`, `ANIM_KEYS`, `SpriteKey`, and `AnimKey`.
 7. Do not stop until both files are written, every sprite is implemented, and every animation is registered.
+
+## Definition of Done
+
+- [ ] `games/<game>/src/assets/SpriteFactory.ts` written with all public exports (`SPRITE_KEYS`, `ANIM_KEYS`, `SpriteFactory`)
+- [ ] `games/<game>/src/assets/index.ts` re-exports all public symbols
+- [ ] Every row in the Sprite Specifications table has drawing code in `preload()`
+- [ ] Every row in the Animations table is registered in `registerAnimations()`
+- [ ] `SPRITE_KEYS` entries match Asset ID values exactly; `ANIM_KEYS` entries match Anim Key values exactly
+- [ ] No files outside `games/<game>/src/assets/` were written or modified
