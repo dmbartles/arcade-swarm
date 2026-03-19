@@ -31,11 +31,11 @@ export const WAVE_NO_MISS_BONUS = 50;
  * Sorted descending so the first match wins.
  */
 export const STREAK_THRESHOLDS: ReadonlyArray<{
-  streak: number;
+  minStreak: number;
   multiplier: number;
   label: string;
 }> = [
-  { streak: 10, multiplier: 3.0, label: 'MATH GENIUS!'   },
-  { streak:  5, multiplier: 2.0, label: 'ON FIRE!'       },
-  { streak:  3, multiplier: 1.5, label: 'SHARP SHOOTER!' },
+  { minStreak: 10, multiplier: 3.0, label: 'MATH GENIUS!'   },
+  { minStreak:  5, multiplier: 2.0, label: 'ON FIRE!'       },
+  { minStreak:  3, multiplier: 1.5, label: 'SHARP SHOOTER!' },
 ];
