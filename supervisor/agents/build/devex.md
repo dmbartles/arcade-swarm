@@ -124,6 +124,13 @@ These must be correct for the build to work. Write them fresh if missing; fix on
 ```
 Do NOT use `"build": "tsc && vite build"` — Vite handles transpilation itself; `tsc` is for type-checking only (`npm run typecheck`).
 
+**`package.json` devDependencies must include these testing packages** — the build agent writes tests and will fail silently without them:
+```json
+"jsdom": "^24.0.0",
+"@vitest/coverage-v8": "^1.0.0"
+```
+`jsdom` is required by `vitest.config.ts` as the test environment. `@vitest/coverage-v8` is required for coverage reporting. Both must be present in the scaffold — the QA agent discovers their absence only at runtime, wasting turns.
+
 **`tsconfig.json` must have `"noEmit": true`** and must NOT have conflicting output flags (`outDir`, `declaration`) alongside `noEmit`.
 
 **`shared/audio/`, `shared/visual/`, `shared/analytics/`** must each have a valid `package.json` with a `types` field pointing to `./src/index.ts`, and a `src/index.ts` stub file. The math-engine already has these — use it as the reference.

@@ -18,28 +18,19 @@ Agent tiers (in order):
        assets          → produces games/<game>/src/assets/SpriteFactory.ts
                        (receives reference images; committed to master before build starts)
 
-  2. Build tier   — five phases (sound-guide is on master before this tier starts):
+  2. Build tier   — three phases (sound-guide is on master before this tier starts):
        Phase 1:   DevEx        — scaffolds build tooling (package.json, vite, tsconfig,
                                  index.html) + writes src/types/ interface stubs.
                                  Runs in its own worktree (feature/build-pipeline).
                                  [Auto-merges feature/build-pipeline → master on completion.]
-       Phase 2:   Coordinator  — reads all design docs + src/types/ stubs; writes
-                                 concrete build plans to docs/build-plans/ for each
-                                 coding agent. Runs in the main repo (no worktree).
-                                 [Auto-commits build plans to master on completion.]
-       Phase 3:   Engine       — runs sequentially (first); writes scenes, config, main.ts.
-                                 Other agents import its config constants — it must finish first.
-                                 Worktree: feature/game-engine.
-                                 [Auto-merges feature/game-engine → master on completion.]
-       Phase 4:   Gameplay+Math — run in parallel after Engine merges; each owns disjoint files.
-                                   engine   (feature/game-engine)        → scenes, config, main.ts
-                                   gameplay (feature/gameplay-mechanics)  → entities, ScoreManager
-                                   math     (feature/math-engine)        → shared/math-engine,
-                                                                            MathEngine, DifficultyManager
-                                 [Merges gameplay + math branches → master; cleans up all worktrees.]
-       Phase 5:   Integration  — runs in main repo after merge; fixes cross-agent wiring
-                                 errors (constructor mismatches, import paths, payload shapes)
-                                 until typecheck + lint pass clean.
+       Phase 2:   Coordinator  — reads all design docs + src/types/ stubs; writes a single
+                                 comprehensive build plan to docs/build-plans/<game>-build.md.
+                                 Runs in the main repo (no worktree).
+                                 [Auto-commits build plan to master on completion.]
+       Phase 3:   Build        — single Opus agent; builds the entire game (engine + gameplay +
+                                 math) in REPO_ROOT with no worktree. Pre-loaded with every
+                                 design doc, the build plan, SpriteFactory, and type stubs.
+                                 150-turn budget, 3-hour timeout, 65 536-token output ceiling.
 
   3. Quality tier — parallel; reviews the combined merged output
        architecture  → docs/reviews/architecture.md
@@ -67,10 +58,8 @@ Usage:
     python main.py --game missile-command-math --tier build
     python main.py --game missile-command-math --tier build --stop-after devex        <- stop after Phase 1; inspect games/missile-command-math/src/types/
     python main.py --game missile-command-math --tier build --start-after devex       <- skip Phase 1; resume from coordinator (Phase 2)
-    python main.py --game missile-command-math --tier build --stop-after coordinator  <- stop after Phase 2; inspect docs/build-plans/
-    python main.py --game missile-command-math --tier build --start-after coordinator <- skip Phases 1-2; resume from engine (Phase 3)
-    python main.py --game missile-command-math --tier build --stop-after engine       <- stop after Phase 3; inspect engine output before parallel agents
-    python main.py --game missile-command-math --tier build --start-after engine      <- skip Phases 1-3; resume from gameplay+math (Phase 4)
+    python main.py --game missile-command-math --tier build --stop-after coordinator  <- stop after Phase 2; inspect docs/build-plans/<game>-build.md
+    python main.py --game missile-command-math --tier build --start-after coordinator <- skip Phases 1-2; go straight to build agent (Phase 3)
     python main.py --game missile-command-math --tier build --clean   <- wipe worktrees + branches before building
     python main.py --game missile-command-math --tier clean            <- wipe worktrees + branches only (no build)
     python main.py --game missile-command-math --tier quality
@@ -87,7 +76,7 @@ Usage:
                context, or multi-step instructions. Relative to the repo root.
 
 Prerequisites:
-    1. Copy ../.env.example to ../.env and set ANTHROPIC_API_KEY
+    1. Create a ../.env file and set ANTHROPIC_API_KEY=<your-key>
     2. pip install -r requirements.txt
 """
 
@@ -117,25 +106,81 @@ REPO_ROOT = Path(__file__).parent.parent
 LOGS_DIR = Path(__file__).parent / "logs"
 
 # ---------------------------------------------------------------------------
-# Tiered model selection
+# Tiered model selection — one constant per agent; change here to affect that agent everywhere
 # ---------------------------------------------------------------------------
-DESIGN_MODEL  = "claude-sonnet-4-6"         # markdown doc generation from creative briefs
-COORD_MODEL   = "claude-sonnet-4-6"         # structured planning from design documents
-BUILD_MODEL   = "claude-sonnet-4-6"           # complex multi-file code generation
-QUALITY_MODEL = "claude-sonnet-4-6"         # code review and structured reporting
-SMOKE_MODEL   = "claude-haiku-4-5-20251001" # 2-turn API + file I/O connectivity check
+GAME_DESIGN_MODEL     = "claude-sonnet-4-6"
+ART_DIRECTION_MODEL   = "claude-sonnet-4-6"
+SOUND_DIRECTION_MODEL = "claude-sonnet-4-6"
+CURRICULUM_MODEL      = "claude-sonnet-4-6"
+ASSETS_MODEL          = "claude-opus-4-6"    # Opus: Canvas drawing code needs the same precision as game code
+DEVEX_MODEL           = "claude-opus-4-6"    # Opus: scaffolding sets the foundation everything else imports
+COORDINATOR_MODEL     = "claude-sonnet-4-6"
+BUILD_MODEL           = "claude-opus-4-6"    # Opus: full-game coherent code generation
+SMOKE_MODEL           = "claude-haiku-4-5-20251001"
+ARCHITECTURE_MODEL    = "claude-sonnet-4-6"
+SECURITY_MODEL        = "claude-sonnet-4-6"
+QA_MODEL              = "claude-sonnet-4-6"
+ACCESSIBILITY_MODEL   = "claude-sonnet-4-6"
+PERFORMANCE_MODEL     = "claude-sonnet-4-6"
+PATCH_MODEL           = "claude-opus-4-6"    # Opus: patches require the same precision as the original build
 
 # ---------------------------------------------------------------------------
-# Tiered token limits
+# Tiered token limits — max output tokens per API response turn, per agent
 # ---------------------------------------------------------------------------
-DESIGN_MAX_TOKENS  = 12_288   # structured templates cap output; 12k is generous headroom
-COORD_MAX_TOKENS   = 32_768   # three detailed build plan files (same scale as code output)
-BUILD_MAX_TOKENS   = 32_768   # full game modules (Opus 4.6 supports 128K output)
-QUALITY_MAX_TOKENS = 8_192    # review reports
-SMOKE_MAX_TOKENS   = 4_096    # 2-turn smoke check
+GAME_DESIGN_MAX_TOKENS     = 12_288
+ART_DIRECTION_MAX_TOKENS   = 12_288
+SOUND_DIRECTION_MAX_TOKENS = 12_288
+CURRICULUM_MAX_TOKENS      = 12_288
+ASSETS_MAX_TOKENS          = 32_768
+DEVEX_MAX_TOKENS           = 32_768
+COORDINATOR_MAX_TOKENS     = 32_768
+BUILD_MAX_TOKENS           = 65_536  # large ceiling: full-file writes in a single turn
+SMOKE_MAX_TOKENS           = 4_096
+ARCHITECTURE_MAX_TOKENS    = 8_192
+SECURITY_MAX_TOKENS        = 8_192
+QA_MAX_TOKENS              = 32_768  # raised from 8_192 — test file generation requires large single writes
+ACCESSIBILITY_MAX_TOKENS   = 8_192
+PERFORMANCE_MAX_TOKENS     = 8_192
+PATCH_MAX_TOKENS           = 32_768
 
-MAX_TURNS    = 50             # per CLAUDE.md: no agent run exceeds 50 turns
-AGENT_TIMEOUT_SECONDS = 600  # 10-minute wall-clock limit per agent run, per CLAUDE.md
+# ---------------------------------------------------------------------------
+# Tiered turn limits — max tool-use loop iterations per agent run
+# ---------------------------------------------------------------------------
+GAME_DESIGN_MAX_TURNS     = 50
+ART_DIRECTION_MAX_TURNS   = 50
+SOUND_DIRECTION_MAX_TURNS = 50
+CURRICULUM_MAX_TURNS      = 50
+ASSETS_MAX_TURNS          = 50
+DEVEX_MAX_TURNS           = 50
+COORDINATOR_MAX_TURNS     = 50
+BUILD_MAX_TURNS           = 150   # builds entire game: engine + gameplay + math in one pass
+SMOKE_MAX_TURNS           = 5
+ARCHITECTURE_MAX_TURNS    = 50
+SECURITY_MAX_TURNS        = 50
+QA_MAX_TURNS              = 50
+ACCESSIBILITY_MAX_TURNS   = 50
+PERFORMANCE_MAX_TURNS     = 50
+PATCH_MAX_TURNS           = 50
+
+# ---------------------------------------------------------------------------
+# Tiered timeouts — wall-clock seconds before an agent run is forcibly stopped
+# ---------------------------------------------------------------------------
+GAME_DESIGN_TIMEOUT     = 600
+ART_DIRECTION_TIMEOUT   = 600
+SOUND_DIRECTION_TIMEOUT = 600
+CURRICULUM_TIMEOUT      = 600
+ASSETS_TIMEOUT          = 900    # SpriteFactory drawing code is thorough; 15 min headroom
+DEVEX_TIMEOUT           = 600
+COORDINATOR_TIMEOUT     = 900    # one large build plan; 15 min headroom
+BUILD_TIMEOUT           = 10_800 # 150 turns × ~60 s/turn; 3-hour ceiling
+SMOKE_TIMEOUT           = 120
+ARCHITECTURE_TIMEOUT    = 600
+SECURITY_TIMEOUT        = 600
+QA_TIMEOUT              = 600
+ACCESSIBILITY_TIMEOUT   = 600
+PERFORMANCE_TIMEOUT     = 600
+PATCH_TIMEOUT           = 900    # targeted fixes + typecheck/lint rounds; 15 min headroom
+
 MAX_RETRIES  = 3              # retries on 429 rate-limit / 529 overloaded errors
 RETRY_DELAYS = [30, 60, 120]  # seconds between retries
 
@@ -144,8 +189,13 @@ MAX_TOOL_RESULT_CHARS = 40_000
 
 # Message history compression -- keeps context size bounded over long agent runs.
 # Tool results older than HISTORY_KEEP_FULL_TURNS are compressed to HISTORY_TRIM_TO_CHARS chars.
-HISTORY_KEEP_FULL_TURNS = 12
-HISTORY_TRIM_TO_CHARS   = 500
+HISTORY_KEEP_FULL_TURNS     = 12
+HISTORY_TRIM_TO_CHARS       = 500
+# The build agent writes files early (turns 3-100) then fixes typecheck errors later
+# (turns 101-130). With 150 turns and only 12 kept at full fidelity, early file-write
+# results are long gone by the error-fixing phase. A larger floor keeps enough context
+# for the agent to understand what it wrote without needing to re-read every file.
+BUILD_HISTORY_TRIM_TO_CHARS = 2_000
 
 
 def _ts() -> str:
@@ -483,12 +533,12 @@ def _load_reference_images(game: str) -> list[dict]:
 # Message history compression
 # ---------------------------------------------------------------------------
 
-def _trim_message_history(messages: list) -> list:
+def _trim_message_history(messages: list, trim_to_chars: int = HISTORY_TRIM_TO_CHARS) -> list:
     """
     Compress tool results in old turns to prevent unbounded context growth.
 
     Keeps the last HISTORY_KEEP_FULL_TURNS tool-result user-messages at full
-    fidelity; compresses earlier ones to HISTORY_TRIM_TO_CHARS chars each.
+    fidelity; compresses earlier ones to trim_to_chars chars each.
     The initial user message (task prompt at index 0) is never modified.
 
     Only the copy passed to the API is trimmed -- the supervisor's working
@@ -518,12 +568,12 @@ def _trim_message_history(messages: list) -> list:
             for block in msg["content"]:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     content = block.get("content", "")
-                    if isinstance(content, str) and len(content) > HISTORY_TRIM_TO_CHARS:
+                    if isinstance(content, str) and len(content) > trim_to_chars:
                         block = {
                             **block,
                             "content": (
-                                content[:HISTORY_TRIM_TO_CHARS]
-                                + f"\n... [compressed: {len(content) - HISTORY_TRIM_TO_CHARS} chars omitted]"
+                                content[:trim_to_chars]
+                                + f"\n... [compressed: {len(content) - trim_to_chars} chars omitted]"
                             ),
                         }
                 new_content.append(block)
@@ -542,8 +592,10 @@ DESIGN_AGENTS = [
         "name": "game-design",
         "prompt": "agents/design/game-design.md",
         "tools": ["Read", "Write", "Edit"],
-        "model": DESIGN_MODEL,
-        "max_tokens": DESIGN_MAX_TOKENS,
+        "model": GAME_DESIGN_MODEL,
+        "max_tokens": GAME_DESIGN_MAX_TOKENS,
+        "max_turns": GAME_DESIGN_MAX_TURNS,
+        "timeout_seconds": GAME_DESIGN_TIMEOUT,
         # Brief is the primary input; CLAUDE.md provides project rules.
         "preload": ["CLAUDE.md", "docs/briefs/{game}.md"],
     },
@@ -551,8 +603,10 @@ DESIGN_AGENTS = [
         "name": "art-direction",
         "prompt": "agents/design/art-direction.md",
         "tools": ["Read", "Write", "Edit"],
-        "model": DESIGN_MODEL,
-        "max_tokens": DESIGN_MAX_TOKENS,
+        "model": ART_DIRECTION_MODEL,
+        "max_tokens": ART_DIRECTION_MAX_TOKENS,
+        "max_turns": ART_DIRECTION_MAX_TURNS,
+        "timeout_seconds": ART_DIRECTION_TIMEOUT,
         # GDD exists because game-design ran first (design tier is sequential).
         # inject_references=True causes docs/references/<game>/ images to be
         # base64-encoded and prepended to the first user message as image blocks.
@@ -563,26 +617,32 @@ DESIGN_AGENTS = [
         "name": "sound-direction",
         "prompt": "agents/design/sound-direction.md",
         "tools": ["Read", "Write", "Edit"],
-        "model": DESIGN_MODEL,
-        "max_tokens": DESIGN_MAX_TOKENS,
+        "model": SOUND_DIRECTION_MODEL,
+        "max_tokens": SOUND_DIRECTION_MAX_TOKENS,
+        "max_turns": SOUND_DIRECTION_MAX_TURNS,
+        "timeout_seconds": SOUND_DIRECTION_TIMEOUT,
         # Style guide exists because art-direction ran first; drives tonal anchoring.
-        # Sound guide must be on master before build tier so engine agent can preload it.
+        # Sound guide must be on master before build tier so the build agent can preload it.
         "preload": ["CLAUDE.md", "docs/briefs/{game}.md", "docs/gdds/{game}.md", "docs/style-guides/{game}.md"],
     },
     {
         "name": "curriculum",
         "prompt": "agents/design/curriculum.md",
         "tools": ["Read", "Write", "Edit"],
-        "model": DESIGN_MODEL,
-        "max_tokens": DESIGN_MAX_TOKENS,
+        "model": CURRICULUM_MODEL,
+        "max_tokens": CURRICULUM_MAX_TOKENS,
+        "max_turns": CURRICULUM_MAX_TURNS,
+        "timeout_seconds": CURRICULUM_TIMEOUT,
         "preload": ["CLAUDE.md", "docs/briefs/{game}.md", "docs/gdds/{game}.md"],
     },
     {
         "name": "assets",
         "prompt": "agents/design/assets.md",
         "tools": ["Read", "Write", "Edit"],
-        "model": BUILD_MODEL,          # Opus: drawing code requires the same precision as game code
-        "max_tokens": BUILD_MAX_TOKENS,
+        "model": ASSETS_MODEL,
+        "max_tokens": ASSETS_MAX_TOKENS,
+        "max_turns": ASSETS_MAX_TURNS,
+        "timeout_seconds": ASSETS_TIMEOUT,
         # Style guide exists because art-direction ran first.
         # inject_references=True so the agent sees the actual reference images
         # when deciding how to draw each sprite.
@@ -598,8 +658,10 @@ DEVEX_AGENT = {
     "worktree": "../agent-4-devex",
     "branch": "feature/build-pipeline",
     "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
-    "model": BUILD_MODEL,
-    "max_tokens": BUILD_MAX_TOKENS,
+    "model": DEVEX_MODEL,
+    "max_tokens": DEVEX_MAX_TOKENS,
+    "max_turns": DEVEX_MAX_TURNS,
+    "timeout_seconds": DEVEX_TIMEOUT,
     "preload": [
         "CLAUDE.md",
         "docs/gdds/{game}.md",
@@ -613,16 +675,16 @@ DEVEX_AGENT = {
     ],
 }
 
-# Phase 1.5 -- Coordinator: reads all design docs + type stubs, writes build plans.
-# By the time Coordinator runs, feature/build-pipeline has been merged into master
-# so the type stubs are visible in REPO_ROOT/games/{game}/src/types/.
+# Phase 2 -- Coordinator: reads all design docs + type stubs (now on master after DevEx merge),
+# writes a single comprehensive build plan: docs/build-plans/<game>-build.md.
 COORDINATOR_AGENT = {
     "name": "coordinator",
     "prompt": "agents/build/coordinator.md",
     "tools": ["Read", "Write", "Glob"],
-    "model": COORD_MODEL,
-    "max_tokens": COORD_MAX_TOKENS,
-    "timeout_seconds": 900,  # 3 writes × ~4 min each; 15 min is safe headroom
+    "model": COORDINATOR_MODEL,
+    "max_tokens": COORDINATOR_MAX_TOKENS,
+    "max_turns": COORDINATOR_MAX_TURNS,
+    "timeout_seconds": COORDINATOR_TIMEOUT,
     # All design docs + type stubs pre-loaded; coordinator won't need Read tool for them.
     "preload": [
         "CLAUDE.md",
@@ -638,107 +700,43 @@ COORDINATOR_AGENT = {
     ],
 }
 
-# Phase 3 -- engine: runs sequentially before gameplay/math.
-# Its config constants are imported by the gameplay and math agents.
-ENGINE_AGENT = {
-    "name": "engine",
-    "prompt": "agents/build/engine.md",
-    "worktree": "../agent-engine",
-    "branch": "feature/game-engine",
+# Phase 3 -- single Opus build agent: builds everything (engine + gameplay + math).
+# Replaces the former engine → gameplay+math (parallel) → integration pipeline.
+# No worktree -- writes directly to master in REPO_ROOT.
+# Pre-loaded with every design doc + the coordinator's build plan + type stubs +
+# SpriteFactory so it has full context before writing turn 1.
+BUILD_AGENT = {
+    "name": "build",
+    "prompt": "agents/build/build.md",
     "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
     "model": BUILD_MODEL,
     "max_tokens": BUILD_MAX_TOKENS,
+    "max_turns": BUILD_MAX_TURNS,
+    "timeout_seconds": BUILD_TIMEOUT,
+    # Larger trim floor than the default 500: the build agent writes files in turns
+    # 3-100 then fixes typecheck errors in turns 101-130.  With only 12 turns kept
+    # at full fidelity, early Write results would be compressed to near-nothing by
+    # the error-fixing phase, forcing costly re-reads.  2 000 chars keeps enough
+    # of each result for the agent to recall what it wrote without re-reading.
+    "history_trim_chars": BUILD_HISTORY_TRIM_TO_CHARS,
     "preload": [
         "CLAUDE.md",
         "docs/gdds/{game}.md",
         "docs/style-guides/{game}.md",
         "docs/sound-guides/{game}.md",
-        "docs/build-plans/{game}-engine.md",
-        # SpriteFactory -- pre-loaded so the engine agent knows the full texture
-        # key API before writing any scene or entity code.
-        "games/{game}/src/assets/SpriteFactory.ts",
-        # Type stubs -- pre-loaded so the agent knows exact exports before writing imports,
-        # avoiding typecheck failures caused by importing from the wrong source file.
-        "games/{game}/src/types/GameEvents.ts",
-        "games/{game}/src/types/IMathProblem.ts",
-        "games/{game}/src/types/IMathEngine.ts",
-        "games/{game}/src/types/IScoreManager.ts",
-        "games/{game}/src/types/IDifficultyConfig.ts",
-        "games/{game}/src/types/index.ts",
-    ],
-}
-
-# Phase 4 -- gameplay and math: run in parallel after engine merges into master.
-# By the time these run, master contains: type stubs + build plans + engine code (config, scenes).
-GAMEPLAY_AGENT = {
-    "name": "gameplay",
-    "prompt": "agents/build/gameplay.md",
-    "worktree": "../agent-gameplay",
-    "branch": "feature/gameplay-mechanics",
-    "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-    "model": BUILD_MODEL,
-    "max_tokens": BUILD_MAX_TOKENS,
-    "timeout_seconds": 900,  # ~18 entity files + typecheck rounds; 15 min is safe headroom
-    "preload": [
-        "CLAUDE.md",
-        "docs/gdds/{game}.md",
-        "docs/style-guides/{game}.md",
-        "docs/build-plans/{game}-gameplay.md",
-        # SpriteFactory -- gameplay entities use sprite keys; must know the API.
-        "games/{game}/src/assets/SpriteFactory.ts",
-        # Type stubs -- pre-loaded so the agent knows exact exports before writing imports.
-        "games/{game}/src/types/GameEvents.ts",
-        "games/{game}/src/types/IMathProblem.ts",
-        "games/{game}/src/types/IMathEngine.ts",
-        "games/{game}/src/types/IScoreManager.ts",
-        "games/{game}/src/types/IDifficultyConfig.ts",
-        "games/{game}/src/types/index.ts",
-    ],
-}
-
-MATH_AGENT = {
-    "name": "math",
-    "prompt": "agents/build/math.md",
-    "worktree": "../agent-math",
-    "branch": "feature/math-engine",
-    "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-    "model": BUILD_MODEL,
-    "max_tokens": BUILD_MAX_TOKENS,
-    "timeout_seconds": 900,  # generators + MathEngine.ts + DifficultyManager.ts; 15 min headroom
-    "preload": [
-        "CLAUDE.md",
-        "docs/gdds/{game}.md",
-        "docs/style-guides/{game}.md",
         "docs/curriculum-maps/{game}.md",
-        "docs/build-plans/{game}-math.md",
-        # Type stubs -- pre-loaded so the agent knows exact exports before writing imports.
+        # Coordinator's single comprehensive build plan (committed before this agent runs).
+        "docs/build-plans/{game}-build.md",
+        # SpriteFactory -- pre-loaded so the agent knows the full texture key API
+        # before writing any scene or entity code.
+        "games/{game}/src/assets/SpriteFactory.ts",
+        # Type stubs -- pre-loaded to prevent import-path typecheck failures.
         "games/{game}/src/types/GameEvents.ts",
         "games/{game}/src/types/IMathProblem.ts",
         "games/{game}/src/types/IMathEngine.ts",
         "games/{game}/src/types/IScoreManager.ts",
         "games/{game}/src/types/IDifficultyConfig.ts",
         "games/{game}/src/types/index.ts",
-    ],
-}
-
-# Convenience list of all worktree-based coding agents (used by BUILD_AGENTS / clean)
-CODING_AGENTS = [ENGINE_AGENT, GAMEPLAY_AGENT, MATH_AGENT]
-
-# Parallel coding agents (Phase 4 -- run after engine merges)
-PARALLEL_CODING_AGENTS = [GAMEPLAY_AGENT, MATH_AGENT]
-
-# Phase 5 -- integration: runs in main repo after all branches are merged.
-# Fixes cross-agent wiring errors (constructor mismatches, import paths, payload shapes)
-# until typecheck and lint pass clean. No worktree -- operates on master directly.
-INTEGRATION_AGENT = {
-    "name": "integration",
-    "prompt": "agents/build/integration.md",
-    "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-    "model": BUILD_MODEL,
-    "max_tokens": BUILD_MAX_TOKENS,
-    "preload": [
-        "CLAUDE.md",
-        "docs/gdds/{game}.md",
     ],
 }
 
@@ -748,6 +746,8 @@ SMOKE_AGENT = {
     "tools": ["Read", "Write"],
     "model": SMOKE_MODEL,
     "max_tokens": SMOKE_MAX_TOKENS,
+    "max_turns": SMOKE_MAX_TURNS,
+    "timeout_seconds": SMOKE_TIMEOUT,
     "preload": ["CLAUDE.md"],
 }
 
@@ -756,41 +756,52 @@ QUALITY_AGENTS = [
         "name": "architecture",
         "prompt": "agents/quality/architecture.md",
         "tools": ["Read", "Glob", "Grep", "Write"],
-        "model": QUALITY_MODEL,
-        "max_tokens": QUALITY_MAX_TOKENS,
-        "preload": ["CLAUDE.md"],
+        "model": ARCHITECTURE_MODEL,
+        "max_tokens": ARCHITECTURE_MAX_TOKENS,
+        "max_turns": ARCHITECTURE_MAX_TURNS,
+        "timeout_seconds": ARCHITECTURE_TIMEOUT,
+        # GDD gives reviewers the intended design so they can judge intent vs. implementation.
+        "preload": ["CLAUDE.md", "docs/gdds/{game}.md"],
     },
     {
         "name": "security",
         "prompt": "agents/quality/security.md",
         "tools": ["Read", "Glob", "Grep", "Bash", "Write"],
-        "model": QUALITY_MODEL,
-        "max_tokens": QUALITY_MAX_TOKENS,
-        "preload": ["CLAUDE.md"],
+        "model": SECURITY_MODEL,
+        "max_tokens": SECURITY_MAX_TOKENS,
+        "max_turns": SECURITY_MAX_TURNS,
+        "timeout_seconds": SECURITY_TIMEOUT,
+        "preload": ["CLAUDE.md", "docs/gdds/{game}.md"],
     },
     {
         "name": "qa",
         "prompt": "agents/quality/qa.md",
         "tools": ["Read", "Write", "Edit", "Bash"],
-        "model": QUALITY_MODEL,
-        "max_tokens": QUALITY_MAX_TOKENS,
-        "preload": ["CLAUDE.md"],
+        "model": QA_MODEL,
+        "max_tokens": QA_MAX_TOKENS,
+        "max_turns": QA_MAX_TURNS,
+        "timeout_seconds": QA_TIMEOUT,
+        "preload": ["CLAUDE.md", "docs/gdds/{game}.md"],
     },
     {
         "name": "accessibility",
         "prompt": "agents/quality/accessibility.md",
         "tools": ["Read", "Glob", "Grep", "Write"],
-        "model": QUALITY_MODEL,
-        "max_tokens": QUALITY_MAX_TOKENS,
-        "preload": ["CLAUDE.md"],
+        "model": ACCESSIBILITY_MODEL,
+        "max_tokens": ACCESSIBILITY_MAX_TOKENS,
+        "max_turns": ACCESSIBILITY_MAX_TURNS,
+        "timeout_seconds": ACCESSIBILITY_TIMEOUT,
+        "preload": ["CLAUDE.md", "docs/gdds/{game}.md"],
     },
     {
         "name": "performance",
         "prompt": "agents/quality/performance.md",
         "tools": ["Read", "Glob", "Grep", "Bash", "Write"],
-        "model": QUALITY_MODEL,
-        "max_tokens": QUALITY_MAX_TOKENS,
-        "preload": ["CLAUDE.md"],
+        "model": PERFORMANCE_MODEL,
+        "max_tokens": PERFORMANCE_MAX_TOKENS,
+        "max_turns": PERFORMANCE_MAX_TURNS,
+        "timeout_seconds": PERFORMANCE_TIMEOUT,
+        "preload": ["CLAUDE.md", "docs/gdds/{game}.md"],
     },
 ]
 
@@ -801,11 +812,16 @@ PATCH_AGENT = {
     "name": "patch",
     "prompt": "agents/patch/patch.md",
     "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
-    "model": BUILD_MODEL,       # Opus: same as coding agents; patches require the same precision
-    "max_tokens": BUILD_MAX_TOKENS,
+    "model": PATCH_MODEL,
+    "max_tokens": PATCH_MAX_TOKENS,
+    "max_turns": PATCH_MAX_TURNS,
+    "timeout_seconds": PATCH_TIMEOUT,
     "preload": [
         "CLAUDE.md",
         "docs/gdds/{game}.md",
+        "docs/style-guides/{game}.md",
+        # SpriteFactory -- needed for visual/animation patches to know available keys.
+        "games/{game}/src/assets/SpriteFactory.ts",
         "games/{game}/src/types/GameEvents.ts",
         "games/{game}/src/types/IMathProblem.ts",
         "games/{game}/src/types/IMathEngine.ts",
@@ -814,14 +830,12 @@ PATCH_AGENT = {
     ],
 }
 
-# All agents that use worktrees (used by clean / worktree management)
-BUILD_AGENTS = [DEVEX_AGENT] + CODING_AGENTS
-
-# Phase 4 merge: only gameplay + math. Engine was already merged after Phase 3.
-_PHASE4_MERGE_AGENTS = PARALLEL_CODING_AGENTS
+# All agents that use git worktrees (used by clean / worktree management).
+# BUILD_AGENT runs in REPO_ROOT with no worktree -- only DevEx needs one.
+BUILD_AGENTS = [DEVEX_AGENT]
 
 # Ordered build phase names — used for start_after / stop_after comparisons.
-_BUILD_PHASE_ORDER = ["devex", "coordinator", "engine", "gameplay"]
+_BUILD_PHASE_ORDER = ["devex", "coordinator", "build"]
 
 
 def _phase_skipped(phase: str, start_after: str | None) -> bool:
@@ -864,7 +878,8 @@ def run_agent(
     """
     model           = agent.get("model",           BUILD_MODEL)
     max_tokens      = agent.get("max_tokens",      BUILD_MAX_TOKENS)
-    timeout_seconds = agent.get("timeout_seconds", AGENT_TIMEOUT_SECONDS)
+    max_turns       = agent.get("max_turns",       50)    # every agent sets this explicitly
+    timeout_seconds = agent.get("timeout_seconds", 600)   # every agent sets this explicitly
 
     # Load pre-injected reference documents (always read from REPO_ROOT)
     preloaded_content, preloaded_paths = _load_preload_docs(agent, game)
@@ -962,7 +977,7 @@ def run_agent(
             write(f"Pre-loaded: {', '.join(preloaded_paths)}\n\n")
 
         start_time = time.monotonic()
-        while turn < MAX_TURNS:
+        while turn < max_turns:
             if time.monotonic() - start_time > timeout_seconds:
                 write(
                     f"[{_ts()}] X FAILED: agent exceeded {timeout_seconds}s "
@@ -975,7 +990,10 @@ def run_agent(
 
             # Compress old tool results before sending to keep context bounded.
             # The full messages list is preserved for accurate turn tracking.
-            api_messages = _trim_message_history(messages)
+            api_messages = _trim_message_history(
+                messages,
+                trim_to_chars=agent.get("history_trim_chars", HISTORY_TRIM_TO_CHARS),
+            )
 
             # API call with retry on rate-limit / overloaded errors
             retry_count = 0
@@ -1082,7 +1100,7 @@ def run_agent(
             log.error("unexpected stop reason", name=agent["name"], stop_reason=response.stop_reason)
             return 1
 
-        write(f"\n[{_ts()}] X FAILED: agent reached the {MAX_TURNS}-turn limit without finishing.\n")
+        write(f"\n[{_ts()}] X FAILED: agent reached the {max_turns}-turn limit without finishing.\n")
         log.warning("agent hit turn limit", name=agent["name"], turns=turn)
         return 1
 
@@ -1304,103 +1322,11 @@ def merge_devex_branch(run_log_dir: Path) -> bool:
 
 def commit_build_plans(game: str, run_log_dir: Path) -> bool:
     return _git_commit(
-        [
-            f"docs/build-plans/{game}-engine.md",
-            f"docs/build-plans/{game}-gameplay.md",
-            f"docs/build-plans/{game}-math.md",
-        ],
-        f"chore: coordinator build plans for {game}",
+        [f"docs/build-plans/{game}-build.md"],
+        f"chore: coordinator build plan for {game}",
         run_log_dir,
         "commit-build-plans.log",
     )
-
-
-def merge_engine_branch(run_log_dir: Path) -> bool:
-    return _git_merge(
-        ENGINE_AGENT["branch"],
-        f"chore: merge {ENGINE_AGENT['branch']} (engine scenes + config)",
-        run_log_dir,
-        "merge-engine.log",
-    )
-
-
-def merge_build_branches(run_log_dir: Path) -> bool:
-    """
-    Phase 4 completion: merge gameplay + math branches into master.
-    Engine and DevEx were already merged in earlier phases.
-    On conflict, stops and prints resolution instructions.
-    On success, removes all remaining build worktrees.
-    """
-    merge_log = run_log_dir / "merge.log"
-    with open(merge_log, "w", encoding="utf-8") as f:
-        f.write(f"=== Phase 4 merge: gameplay + math branches | {_ts()} ===\n\n")
-        for agent in _PHASE4_MERGE_AGENTS:
-            if not _git_merge(
-                agent["branch"],
-                f"chore: merge {agent['branch']}",
-                run_log_dir,
-                f"merge-{agent['name']}.log",
-            ):
-                f.write(f"[{_ts()}] X MERGE CONFLICT in {agent['branch']}\n")
-                f.write("Resolve conflicts manually, then run:\n")
-                f.write("  git add -A && git merge --continue\n")
-                f.write("Then re-run the quality tier.\n")
-                log.error(
-                    "merge conflict -- manual intervention required",
-                    branch=agent["branch"],
-                )
-                return False
-            f.write(f"[{_ts()}] + Merged {agent['branch']}\n\n")
-
-        f.write(f"[{_ts()}] Cleaning up worktrees...\n")
-        for agent in BUILD_AGENTS:
-            worktree = REPO_ROOT.parent / agent["worktree"].lstrip("../")
-            if worktree.exists():
-                r = subprocess.run(
-                    ["git", "worktree", "remove", str(worktree), "--force"],
-                    cwd=REPO_ROOT, capture_output=True, text=True,
-                )
-                status = "ok" if r.returncode == 0 else r.stderr.strip()
-                f.write(f"[{_ts()}]   Removed {worktree.name}: {status}\n")
-
-        subprocess.run(["git", "worktree", "prune"], cwd=REPO_ROOT, capture_output=True)
-        f.write(f"\n[{_ts()}] + All branches merged. Worktrees cleaned up.\n")
-        log.info("build merge complete", merge_log=str(merge_log))
-
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Build agent async wrapper
-# ---------------------------------------------------------------------------
-
-async def run_build_agent_async(
-    agent: dict, game: str, run_log_dir: Path, executor: ThreadPoolExecutor, client: anthropic.Anthropic = None
-) -> int:
-    """Run a build agent in its dedicated git worktree."""
-    worktree = _ensure_worktree(agent)
-
-    # Install dependencies so node_modules/.bin/tsc etc. are available.
-    # Without this, `npm run typecheck` fails because tsc is not in PATH
-    # and the agent wastes turns falling back to `npx tsc`.
-    node_modules = worktree / "node_modules"
-    if not node_modules.exists():
-        log.info("installing npm dependencies in worktree", agent=agent["name"], path=str(worktree))
-        result = subprocess.run(
-            "npm install",
-            cwd=worktree,
-            capture_output=True,
-            text=True,
-            shell=True,  # required on Windows: npm is npm.cmd, not a plain executable
-        )
-        if result.returncode != 0:
-            log.warning("npm install failed in worktree", agent=agent["name"], stderr=result.stderr[:500])
-        else:
-            log.info("npm install complete", agent=agent["name"])
-
-    agent_log = run_log_dir / f"{agent['name']}.log"
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(executor, run_agent, agent, game, worktree, agent_log, client)
 
 
 # ---------------------------------------------------------------------------
@@ -1443,18 +1369,27 @@ async def run_build_tier_async(
     client: anthropic.Anthropic = None,
 ):
     """
-    Run the build tier across five phases.
+    Run the build tier across three phases:
+
+      Phase 1 — DevEx: scaffolds build tooling + src/types/ interface stubs.
+                Runs in its own worktree; auto-merges into master on completion.
+
+      Phase 2 — Coordinator: reads all design docs + type stubs (now on master);
+                writes a single comprehensive build plan to docs/build-plans/<game>-build.md.
+                Auto-commits the plan to master on completion.
+
+      Phase 3 — Build: single Opus agent; builds the entire game (engine + gameplay +
+                math) in REPO_ROOT with no worktree; has 150 turns and 3-hour timeout.
+                All design docs, the build plan, SpriteFactory, and type stubs are
+                pre-loaded so it starts writing on turn 1.
 
     stop_after  -- stop after the named phase for inspection before continuing:
       "devex"       -- stop after Phase 1; inspect src/types/
-      "coordinator" -- stop after Phase 2; inspect docs/build-plans/
-      "engine"      -- stop after Phase 3; inspect engine output before parallel agents
+      "coordinator" -- stop after Phase 2; inspect docs/build-plans/<game>-build.md
 
     start_after -- skip phases up to and including the named phase (resume mode):
-      "devex"       -- skip Phase 1; assume feature/build-pipeline already merged;
-                       resume from Phase 2 (coordinator)
-      "coordinator" -- skip Phases 1-2; assume build plans committed; resume from Phase 3 (engine)
-      "engine"      -- skip Phases 1-3; assume engine branch merged; resume from Phase 4 (gameplay+math)
+      "devex"       -- skip Phase 1; assume feature/build-pipeline already merged
+      "coordinator" -- skip Phases 1-2; assume build plan committed; go straight to build
     """
     # -------------------------------------------------------------------------
     # Phase 1: DevEx -- scaffold build tooling and src/types/ interface stubs.
@@ -1488,26 +1423,26 @@ async def run_build_tier_async(
 
     # -------------------------------------------------------------------------
     # Phase 2: Coordinator -- reads all design docs + type stubs (now on master),
-    # writes docs/build-plans/<game>-engine/gameplay/math.md.
-    # Auto-commits build plans to master on completion.
+    # writes a single docs/build-plans/<game>-build.md.
+    # Auto-commits the build plan to master on completion.
     # -------------------------------------------------------------------------
     if _phase_skipped("coordinator", start_after):
         log.info("=== Build Tier -- Phase 2: Coordinator (SKIPPED via --start-after) ===")
     else:
-        log.info("=== Build Tier -- Phase 2: Coordinator (build plans) ===")
+        log.info("=== Build Tier -- Phase 2: Coordinator (single build plan) ===")
         coordinator_log = run_log_dir / f"{COORDINATOR_AGENT['name']}.log"
 
         coordinator_result = run_agent(COORDINATOR_AGENT, game, REPO_ROOT, coordinator_log, client)
 
         if coordinator_result != 0:
-            log.error("coordinator agent failed -- cannot proceed to engine phase", log=str(coordinator_log))
+            log.error("coordinator agent failed -- cannot proceed to build phase", log=str(coordinator_log))
             raise SystemExit(1)
-        log.info("coordinator complete -- committing build plans to master")
+        log.info("coordinator complete -- committing build plan to master")
 
         if not commit_build_plans(game, run_log_dir):
-            log.error("build plan commit failed -- cannot proceed to engine phase")
+            log.error("build plan commit failed -- cannot proceed to build phase")
             raise SystemExit(1)
-        log.info("build plans committed -- engine worktree will inherit them from HEAD")
+        log.info("build plan committed -- build agent will inherit it from HEAD")
 
         if stop_after == "coordinator":
             log.info(
@@ -1517,75 +1452,43 @@ async def run_build_tier_async(
             return
 
     # -------------------------------------------------------------------------
-    # Phase 3: Engine -- runs sequentially first.
-    # Its config constants are imported by the gameplay and math agents.
-    # Auto-merges feature/game-engine -> master on completion.
+    # Phase 3: Build -- single Opus agent writes the entire game.
+    # Runs in REPO_ROOT (no worktree). npm install runs first so typecheck works.
     # -------------------------------------------------------------------------
-    if _phase_skipped("engine", start_after):
-        log.info("=== Build Tier -- Phase 3: Engine (SKIPPED via --start-after) ===")
+    if _phase_skipped("build", start_after):
+        log.info("=== Build Tier -- Phase 3: Build (SKIPPED via --start-after) ===")
     else:
-        log.info("=== Build Tier -- Phase 3: Engine (scenes + config, sequential) ===")
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            engine_result = await run_build_agent_async(ENGINE_AGENT, game, run_log_dir, executor, client)
+        log.info("=== Build Tier -- Phase 3: Build (single Opus agent, 150 turns) ===")
 
-        if isinstance(engine_result, Exception) or engine_result != 0:
-            log.error("engine agent failed -- cannot proceed to parallel agents", result=str(engine_result))
-            raise SystemExit(1)
-        log.info("engine complete -- merging into master so gameplay/math can see config")
-
-        if not merge_engine_branch(run_log_dir):
-            log.error("engine merge failed -- cannot proceed to parallel agents")
-            raise SystemExit(1)
-        log.info("engine merged -- config constants now visible on master")
-
-        if stop_after == "engine":
-            log.info(
-                "Stopped after Phase 3: Engine (--stop-after engine). "
-                "Inspect engine output then re-run with --start-after engine."
+        # Ensure npm dependencies are installed in the game directory.
+        # DevEx wrote package.json and ran npm install in its worktree;
+        # the merge put package.json on master but not node_modules (gitignored).
+        game_dir = REPO_ROOT / "games" / game
+        if game_dir.exists() and not (game_dir / "node_modules").exists():
+            log.info("installing npm dependencies for build agent", path=str(game_dir))
+            npm_result = subprocess.run(
+                "npm install",
+                cwd=game_dir,
+                capture_output=True,
+                text=True,
+                shell=True,
             )
-            return
+            if npm_result.returncode != 0:
+                log.warning("npm install failed in game dir", stderr=npm_result.stderr[:500])
+            else:
+                log.info("npm install complete")
 
-    # -------------------------------------------------------------------------
-    # Phase 4: Gameplay + Math -- parallel, each owns a disjoint set of files.
-    # Worktrees branch from updated master (type stubs + build plans + engine code).
-    # Merges gameplay + math into master; cleans up all worktrees.
-    # -------------------------------------------------------------------------
-    if _phase_skipped("gameplay", start_after):
-        log.info("=== Build Tier -- Phase 4: Gameplay + Math (SKIPPED via --start-after) ===")
-    else:
-        log.info("=== Build Tier -- Phase 4: Gameplay + Math (parallel) ===")
-        loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor(max_workers=len(PARALLEL_CODING_AGENTS)) as executor:
-            tasks = [
-                run_build_agent_async(agent, game, run_log_dir, executor, client)
-                for agent in PARALLEL_CODING_AGENTS
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+        build_log = run_log_dir / f"{BUILD_AGENT['name']}.log"
+        build_result = run_agent(BUILD_AGENT, game, REPO_ROOT, build_log, client)
 
-        for agent, result in zip(PARALLEL_CODING_AGENTS, results):
-            if isinstance(result, Exception) or result != 0:
-                log.error("coding agent failed", name=agent["name"], result=str(result))
-                raise SystemExit(1)
-        log.info("gameplay and math agents complete -- merging branches")
-
-        if not merge_build_branches(run_log_dir):
+        if build_result != 0:
+            log.error(
+                "build agent failed -- codebase may not compile; check log before proceeding",
+                log=str(build_log),
+            )
             raise SystemExit(1)
-        log.info("all branches merged -- proceeding to integration")
+        log.info("build complete -- full game written and passing typecheck + lint")
 
-    # -------------------------------------------------------------------------
-    # Phase 5: Integration -- runs in main repo after merge.
-    # Fixes cross-agent wiring errors until typecheck + lint pass clean.
-    # -------------------------------------------------------------------------
-    log.info("=== Build Tier -- Phase 5: Integration (cross-agent wiring fixes) ===")
-    integration_log = run_log_dir / f"{INTEGRATION_AGENT['name']}.log"
-    integration_result = run_agent(INTEGRATION_AGENT, game, REPO_ROOT, integration_log, client)
-    if integration_result != 0:
-        log.error(
-            "integration agent failed -- codebase may not compile; check log before proceeding",
-            log=str(integration_log),
-        )
-        raise SystemExit(1)
-    log.info("integration complete -- codebase compiles cleanly")
     log.info("build tier complete")
 
 
@@ -1728,23 +1631,21 @@ def run_patch_tier(
 @click.option(
     "--stop-after",
     default=None,
-    type=click.Choice(["devex", "coordinator", "engine"]),
+    type=click.Choice(["devex", "coordinator"]),
     help=(
         "Stop the build tier after the named phase for inspection. "
         "'devex' stops after Phase 1 (inspect src/types/). "
-        "'coordinator' stops after Phase 2 (inspect docs/build-plans/). "
-        "'engine' stops after Phase 3 (inspect engine output before parallel agents)."
+        "'coordinator' stops after Phase 2 (inspect docs/build-plans/<game>-build.md)."
     ),
 )
 @click.option(
     "--start-after",
     default=None,
-    type=click.Choice(["devex", "coordinator", "engine"]),
+    type=click.Choice(["devex", "coordinator"]),
     help=(
         "Resume the build tier, skipping phases already completed. "
         "'devex' skips Phase 1 and resumes from Phase 2 (coordinator). "
-        "'coordinator' skips Phases 1-2 and resumes from Phase 3 (engine). "
-        "'engine' skips Phases 1-3 and resumes from Phase 4 (gameplay + math)."
+        "'coordinator' skips Phases 1-2 and resumes from Phase 3 (build agent)."
     ),
 )
 @click.option(
@@ -1810,7 +1711,7 @@ def main(
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit(
             "ERROR: ANTHROPIC_API_KEY not set.\n"
-            "Copy .env.example to .env in the repo root and add your key from https://console.anthropic.com"
+            "Create a .env file in the repo root with ANTHROPIC_API_KEY=<your-key> from https://console.anthropic.com"
         )
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])

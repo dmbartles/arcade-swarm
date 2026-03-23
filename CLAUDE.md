@@ -55,7 +55,7 @@ python main.py
 - `docs/briefs/` — Creative briefs from the Creative Director (source of truth for design intent)
 - `docs/references/<game-name>/` — **Visual reference images** dropped in by the Creative Director before build starts. The art direction agent reads these images directly and must anchor every major style decision to a file found here. See [Visual References](#visual-references) below for naming conventions.
 - `docs/gdds/`, `docs/style-guides/`, `docs/sound-guides/`, `docs/curriculum-maps/` — Agent-generated artifacts
-- `docs/build-plans/` — Per-agent build plans written by the Coordinator agent
+- `docs/build-plans/` — Build plan written by the Coordinator agent for the Build agent
 - `docs/reviews/` — Quality tier agent reports (architecture, security, QA, accessibility, performance)
 - `docs/adrs/` — Architecture Decision Records
 
@@ -72,11 +72,10 @@ This project is built by a swarm of Claude Code agents, all orchestrated by a Py
 - Curriculum Alignment Agent: Maps math content to Common Core standards by grade level
 - Asset Creation Agent: Reads style guide + references; writes `games/<game>/src/assets/SpriteFactory.ts` — procedurally draws every sprite in the style guide using HTML Canvas so build agents load real pixel art, not rectangles
 
-**Build Tier** — Write code. Each agent operates in its own git worktree.
-- Engine Agent: Game engine, rendering, scene management, visual effects — imports from SpriteFactory
-- Gameplay Agent: Gameplay mechanics, entities, input handling, scoring
-- Math Agent: Math engine, difficulty scaling, curriculum integration
-- DevEx Agent: Build pipeline, CI/CD, project configuration, tooling
+**Build Tier** — Write code. See `supervisor/main.py` for the authoritative phase sequence.
+- DevEx Agent: Build pipeline, CI/CD, project configuration, tooling; scaffolds `package.json`, `tsconfig`, `vite.config`, `index.html`, and `src/types/` stubs
+- Coordinator Agent: Reads all design docs and type stubs; writes the comprehensive build plan to `docs/build-plans/<game>-build.md`
+- Build Agent: Single Opus agent; builds the entire game (engine + gameplay + math) in one 150-turn pass using the coordinator's plan
 
 **Quality Tier** — Review and test. Produce reports to `docs/reviews/`. Do not modify source code unless explicitly noted.
 - Architecture Agent: Pattern consistency and design coherence review
@@ -88,28 +87,19 @@ This project is built by a swarm of Claude Code agents, all orchestrated by a Py
 #### Agent Tool Permissions
 - Design agents: `Read, Write, Edit` (read specs, write documents to `docs/` only)
   - Exception: Asset Creation Agent gets `Read, Write, Edit` with write access to `games/<game>/src/assets/` only
-- Build agents: `Read, Write, Edit, Bash, Glob, Grep` (full development access within their worktree)
+- Build agents: `Read, Write, Edit, Bash, Glob, Grep` (full development access in the main repo)
 - Quality agents: `Read, Grep, Glob` (read-only review, no code changes)
   - Exception: QA agent gets `Read, Write, Edit, Bash` (writes tests and runs them)
   - Exception: Security agent gets `Read, Grep, Glob, Bash` (runs `npm audit`)
 - Patch agent: `Read, Write, Edit, Bash, Glob` (targeted fixes to an already-built game; runs in main repo, no worktree)
 
 #### Agent Isolation Rules
-- Build agents work in separate git worktrees to prevent conflicts
+- Build agents run in the main repo (no worktrees)
 - Quality agents NEVER modify source code — they produce reports in `docs/reviews/` only
 - Design agents write ONLY to `docs/` — never to `games/` or `shared/` (except Asset Creation Agent — see above)
-- No agent should run for more than 50 turns on a single task
-- The supervisor enforces a 10-minute timeout per agent run
+- No agent should run for more than 50 turns on a single task (exception: the Build agent has a 150-turn budget to build an entire game in one pass)
+- The supervisor enforces a 10-minute timeout per agent run (exception: the Build agent has a 3-hour timeout)
 
-#### Supervisor Operation
-The supervisor (`supervisor/main.py`) orchestrates agents via the Anthropic SDK:
-1. Design tier runs sequentially (each depends on the previous output):
-   - game-design → art-direction → sound-direction → curriculum → **assets**
-   - The art-direction agent receives reference images from `docs/references/<game>/` injected directly into its context as base64 image blocks — it literally sees the images, not just text descriptions
-   - The assets agent writes `SpriteFactory.ts` to master before build agents start
-2. Build tier runs in five phases (DevEx → Coordinator → Engine → Gameplay+Math parallel → Integration)
-3. Quality tier runs after build tier completes (reviews the combined output)
-4. Creative Director reviews quality reports and approves or requests changes
 
 ### Phaser Game Architecture
 
@@ -132,14 +122,6 @@ Pure JS library. Zero dependencies on Phaser or any game code. API contract:
 - Output: `{ question, correctAnswer, distractors[] }`
 
 All math problems in every game come from this library — never from hardcoded strings or static arrays.
-
-### Parallel Agent Workflow
-When multiple agents work simultaneously, each uses a **separate git worktree** so there are no branch conflicts. Each agent's work lives on its own feature branch. The supervisor creates worktrees before spawning build agents:
-```bash
-git worktree add ../agent-engine feature/game-engine
-git worktree add ../agent-gameplay feature/gameplay-mechanics
-git worktree add ../agent-math feature/math-engine
-```
 
 ### Visual References
 
@@ -170,7 +152,7 @@ explosion-palette-ref.png — The pastel lavender/mint/gold explosion palette I 
 - JSDoc on all public functions
 - Named constants for all magic numbers
 - All player-visible text must be extractable for localization (no inline strings in render logic)
-- Web-first design, to be mainly use on broswers, so the game should scale with window size
+- Web-first design, to be mainly used on browsers, so the game should scale with window size
 - Mobile 2nd: every feature must work on touch screens, target 60fps on a 3-year-old mid-range Android phone
 - Game state during gameplay lives in memory only — see the localStorage Policy section for exactly what is and is not permitted
 - **Never use raw string literals for sprite or animation keys.** Always import `SPRITE_KEYS` and `ANIM_KEYS` from `src/assets` and reference keys through those consts. A typo in a raw string is a silent runtime failure; a typo in a const reference is a compile error caught before the game runs.
@@ -197,7 +179,7 @@ explosion-palette-ref.png — The pastel lavender/mint/gold explosion palette I 
 - **No `alert()`, `confirm()`, or `prompt()`.** These break mobile gameplay.
 - **No cross-game imports.** Shared code lives in `/shared/`. Games never import from each other.
 - **No modifying source code from quality tier agents.** Quality agents produce reports only. The QA agent may write test files but never modifies game source code.
-- **No agent runs exceeding 50 turns.** If a task requires more, decompose it into smaller tasks.
+- **No agent runs exceeding 50 turns** (exception: the Build agent uses 150 turns to build an entire game in one pass). **If a task requires more than 50 turns, decompose it into smaller tasks.**
 - **Keep `shared/analytics` events well-typed and versioned** (`{ event, version, payload }`) — this is the contract a future sync layer will consume.
 - **Never couple game scenes directly to `localStorage`** or any persistence layer — always go through `ScoreManager` / `AnalyticsManager` so the backing store can be swapped.
 - **Document hard-to-reverse decisions** in `docs/adrs/` — especially anything that would be difficult to change once a backend or second game exists.
