@@ -14,7 +14,6 @@ import type {
 } from '../types/IMathProblem';
 import type {
   ThreatSpawnedPayload,
-  ThreatDestroyedPayload,
   WaveStartedPayload,
   LevelCompletePayload,
   GameOverPayload,
@@ -36,7 +35,9 @@ import {
   LAUNCHER_LEFT_X,
   LAUNCHER_CENTER_X,
   LAUNCHER_RIGHT_X,
+  LAUNCHER_Y,
   SPEED_BONUS_TIME_FRACTION,
+  BLAST_RADIUS_PX,
 } from '../config/gameConfig';
 import {
   BASE_SPAWN_INTERVAL_MS,
@@ -83,8 +84,6 @@ export class WaveManager {
   /** Answers not yet distributed to launchers (beyond the first 3). */
   private distributionPool: Array<number | string> = [];
 
-  /** Current head of the answer queue. */
-  private loadedRound: number | string | null = null;
 
   /** References to the three launcher entities. */
   private launchers: {
@@ -123,6 +122,9 @@ export class WaveManager {
   /** Whether wave-complete check has already fired. */
   private waveCompleteEmitted: boolean = false;
 
+  /** The currently selected launcher (A/S/D or click-to-select). Null = none selected. */
+  private selectedLauncher: 'left' | 'center' | 'right' | null = null;
+
   /**
    * @param scene          - The GameScene instance.
    * @param diffConfig     - Current difficulty config from DifficultyManager.
@@ -143,8 +145,8 @@ export class WaveManager {
     this.buildings = buildings;
     this.scoreManager = scoreManager;
 
-    // Listen for projectile detonations
-    this.scene.events.on(GameEvents.INTERCEPTOR_DETONATED, this.onInterceptorDetonated, this);
+    // Projectile arrival → blast-radius check
+    this.scene.events.on(GameEvents.PROJECTILE_AT_TARGET, this.onProjectileAtTarget, this);
 
     // Listen for bombs reaching their city
     this.scene.events.on('bomb-reached-city', this.onBombReachedCityEvent, this);
@@ -152,6 +154,14 @@ export class WaveManager {
     // Listen for pause/resume
     this.scene.events.on(GameEvents.GAME_PAUSED, this.stopWave, this);
     this.scene.events.on(GameEvents.GAME_RESUMED, this.resumeWave, this);
+
+    // Scene-wide click: fire selected launcher toward pointer position
+    this.scene.input.on('pointerdown', this.onPlayfieldClick, this);
+
+    // Click a launcher to select it
+    this.launchers.left.on('pointerdown',   () => this.selectLauncher('left'));
+    this.launchers.center.on('pointerdown', () => this.selectLauncher('center'));
+    this.launchers.right.on('pointerdown',  () => this.selectLauncher('right'));
   }
 
   /**
@@ -176,9 +186,6 @@ export class WaveManager {
     // Distribute first 3 answers to launchers; rest go in distribution pool
     this.distributionPool = [...this.answerQueue];
     this.distributeAnswersToLaunchers();
-
-    // Set loaded round to the first answer in the queue
-    this.loadedRound = this.answerQueue[0] ?? null;
 
     const payload: WaveStartedPayload = {
       level: this.diffConfig.level,
@@ -258,166 +265,148 @@ export class WaveManager {
   }
 
   /**
-   * Handle a player tap on a specific bomb.
+   * Select a launcher by position (A/S/D keys or click).
+   * Highlights the chosen launcher and clears the previous selection.
    */
-  handleBombTap(bomb: Bomb): void {
-    if (!bomb.active || bomb.isIntercepted) return;
+  selectLauncher(position: 'left' | 'center' | 'right'): void {
+    if (this.selectedLauncher === position) return;
 
-    // Check if bomb's correctAnswer matches loadedRound
-    const answerMatches =
-      this.loadedRound !== null &&
-      String(bomb.problem.correctAnswer) === String(this.loadedRound);
-
-    if (answerMatches) {
-      // Find the launcher whose loadedAnswer matches (left → center → right)
-      const launcherOrder: Array<'left' | 'center' | 'right'> = ['left', 'center', 'right'];
-      let matchingLauncher: Launcher | null = null;
-
-      for (const pos of launcherOrder) {
-        const launcher = this.launchers[pos];
-        if (
-          !launcher.isReloading &&
-          launcher.loadedAnswer !== null &&
-          String(launcher.loadedAnswer) === String(this.loadedRound)
-        ) {
-          matchingLauncher = launcher;
-          break;
-        }
-      }
-
-      if (!matchingLauncher) {
-        // No launcher available with this answer — treat as wrong tap
-        this.handleWrongTap(bomb);
-        return;
-      }
-
-      // Fire the matching launcher
-      matchingLauncher.fire(bomb.x, bomb.y);
-
-      // Record correct tap
-      this.scoreManager.recordTap(true);
-
-      // Create projectile
-      const nozzleY = matchingLauncher.y - 45; // launcher nozzle top
-      const projectile = new Projectile(
-        this.scene,
-        matchingLauncher.x,
-        nozzleY,
-        bomb,
-        matchingLauncher.launcherPosition,
-      );
-      this.activeProjectiles.set(bomb.threatId, projectile);
-
-      // Advance answer queue
-      const queueIndex = this.answerQueue.indexOf(this.loadedRound!);
-      if (queueIndex !== -1) {
-        this.answerQueue.splice(queueIndex, 1);
-      }
-      this.loadedRound = this.answerQueue[0] ?? null;
-
-      // Schedule launcher reload
-      const reloadDelay = this.diffConfig.launcherReloadDelayMs;
-      this.scene.time.delayedCall(reloadDelay, () => {
-        this.reloadLauncher(matchingLauncher!.launcherPosition);
-      });
-
-      const payload: AnswerValidatedPayload = {
-        problem: bomb.problem,
-        correct: true,
-        attemptedAnswer: bomb.problem.correctAnswer,
-      };
-      this.scene.events.emit(GameEvents.ANSWER_VALIDATED, payload);
-
-    } else {
-      this.handleWrongTap(bomb);
+    // Clear previous highlight
+    if (this.selectedLauncher !== null) {
+      this.launchers[this.selectedLauncher].setSelected(false);
     }
+    this.selectedLauncher = position;
+    this.launchers[position].setSelected(true);
   }
 
   /**
-   * Handle wrong tap — emit events and reset streak.
+   * Scene pointerdown handler — fire selected launcher toward the click point.
+   * Ignores clicks at or below the launcher row (buttons, HUD, launcher selection).
    */
-  private handleWrongTap(bomb: Bomb): void {
-    this.scoreManager.recordTap(false);
-    this.scoreManager.resetStreak();
-
-    // Flash the launcher that's loaded (or nearest)
-    this.flashNearestLauncher(bomb.x);
-
-    const payload: AnswerValidatedPayload = {
-      problem: bomb.problem,
-      correct: false,
-      attemptedAnswer: bomb.problem.correctAnswer,
-    };
-    this.scene.events.emit(GameEvents.ANSWER_VALIDATED, payload);
-    this.scene.events.emit(GameEvents.WRONG_TAP, {});
-  }
-
-  /** Flash the nearest launcher to a given x position. */
-  private flashNearestLauncher(bombX: number): void {
-    const positions: Array<'left' | 'center' | 'right'> = ['left', 'center', 'right'];
-    const launcherXMap: Record<string, number> = {
-      left:   LAUNCHER_LEFT_X,
-      center: LAUNCHER_CENTER_X,
-      right:  LAUNCHER_RIGHT_X,
-    };
-
-    let nearest: 'left' | 'center' | 'right' = 'left';
-    let minDist = Infinity;
-
-    for (const pos of positions) {
-      const dist = Math.abs(bombX - launcherXMap[pos]);
-      if (dist < minDist) {
-        minDist = dist;
-        nearest = pos;
-      }
-    }
-
-    this.launchers[nearest].flashWrong();
+  private onPlayfieldClick(pointer: Phaser.Input.Pointer): void {
+    if (!this.isActive) return;
+    // Only fire into the playfield above the launcher row
+    if (pointer.y >= LAUNCHER_Y) return;
+    this.handlePlayerClick(pointer.x, pointer.y);
   }
 
   /**
-   * Called by INTERCEPTOR_DETONATED handler.
-   * Destroys the targeted bomb, creates Explosion entity, notifies ScoreManager.
+   * Fire the selected launcher toward a fixed world point.
+   * Missile travels to that point regardless of bomb positions;
+   * WaveManager performs the blast-radius check on arrival.
    */
-  onInterceptorDetonated(payload: {
+  handlePlayerClick(x: number, y: number): void {
+    if (this.selectedLauncher === null) {
+      this.scene.events.emit(GameEvents.WRONG_TAP, {});
+      return;
+    }
+
+    const launcher = this.launchers[this.selectedLauncher];
+
+    if (launcher.isReloading) {
+      this.scene.events.emit(GameEvents.WRONG_TAP, {});
+      return;
+    }
+
+    const firedAnswer = launcher.loadedAnswer;
+    const launcherPos = launcher.launcherPosition;
+
+    launcher.fire(x, y);
+
+    const projectileId = nextThreatId(); // reuse ID generator for uniqueness
+    const projectile = new Projectile(
+      this.scene,
+      launcher.x,
+      launcher.nozzleWorldY,
+      x,
+      y,
+      launcherPos,
+      firedAnswer,
+      projectileId,
+    );
+    this.activeProjectiles.set(projectileId, projectile);
+
+    const reloadDelay = this.diffConfig.launcherReloadDelayMs;
+    this.scene.time.delayedCall(reloadDelay, () => {
+      this.reloadLauncher(launcherPos);
+    });
+  }
+
+  /**
+   * Called when a projectile reaches its fixed target point.
+   * Checks all active bombs within BLAST_RADIUS_PX; destroys any whose
+   * correct answer matches the fired answer.
+   */
+  private onProjectileAtTarget(payload: {
     x: number;
     y: number;
-    solvedEquation: string;
-    threatId: string;
+    firedAnswer: number | string | null;
+    projectileId: string;
   }): void {
-    const { x, y, solvedEquation, threatId } = payload;
+    const { x, y, firedAnswer, projectileId } = payload;
 
-    const bomb = this.activeBombs.get(threatId);
-    if (!bomb) return;
+    this.activeProjectiles.delete(projectileId);
 
-    // Compute points
-    const hasSpeedBonus = bomb.descentFraction < SPEED_BONUS_TIME_FRACTION;
-    const basePoints = hasSpeedBonus ? SCORE_VALUES.citySaveBonus : SCORE_VALUES.standardMissile;
-
-    if (hasSpeedBonus) {
-      this.scoreManager.setSpeedBonusEarned();
+    // Collect bombs within blast radius
+    const toDestroy: string[] = [];
+    for (const [threatId, bomb] of this.activeBombs) {
+      if (!bomb.active) continue;
+      const dx = bomb.x - x;
+      const dy = bomb.y - y;
+      if (dx * dx + dy * dy <= BLAST_RADIUS_PX * BLAST_RADIUS_PX) {
+        const isCorrect =
+          firedAnswer !== null &&
+          String(firedAnswer) === String(bomb.problem.correctAnswer);
+        if (isCorrect) {
+          toDestroy.push(threatId);
+        }
+      }
     }
 
-    this.scoreManager.addPoints(basePoints);
-    this.scoreManager.incrementStreak();
+    // Destroy matching bombs and score them
+    let solvedEquation = '';
+    for (const threatId of toDestroy) {
+      const bomb = this.activeBombs.get(threatId);
+      if (!bomb) continue;
 
-    const destroyedPayload: ThreatDestroyedPayload = {
-      threatId,
-      threatType: 'standard-missile',
-      points: basePoints,
-      chainReaction: false,
-    };
-    this.scene.events.emit(GameEvents.THREAT_DESTROYED, destroyedPayload);
+      const hasSpeedBonus = bomb.descentFraction < SPEED_BONUS_TIME_FRACTION;
+      const basePoints = hasSpeedBonus ? SCORE_VALUES.citySaveBonus : SCORE_VALUES.standardMissile;
 
-    // Create explosion at bomb position
-    const explosion = new Explosion(this.scene, x, y, solvedEquation);
-    explosion.play();
+      if (hasSpeedBonus) this.scoreManager.setSpeedBonusEarned();
+      this.scoreManager.addPoints(basePoints);
+      this.scoreManager.incrementStreak();
 
-    // Remove and destroy bomb
-    this.activeBombs.delete(threatId);
-    bomb.intercept();
+      if (!solvedEquation) {
+        solvedEquation = `${bomb.problem.question} = ${bomb.problem.correctAnswer}`;
+      }
 
-    this.totalDestroyed += 1;
+      this.scene.events.emit(GameEvents.THREAT_DESTROYED, {
+        threatId,
+        threatType: 'standard-missile' as const,
+        points: basePoints,
+        chainReaction: false,
+        x,
+        y,
+      });
+
+      this.scene.events.emit(GameEvents.ANSWER_VALIDATED, {
+        problem: bomb.problem,
+        correct: true,
+        attemptedAnswer: firedAnswer ?? bomb.problem.correctAnswer,
+      } satisfies AnswerValidatedPayload);
+
+      this.activeBombs.delete(threatId);
+      bomb.intercept();
+      this.totalDestroyed += 1;
+    }
+
+    // Record overall tap accuracy and reset streak on miss
+    this.scoreManager.recordTap(toDestroy.length > 0);
+    if (toDestroy.length === 0) this.scoreManager.resetStreak();
+
+    // Always emit INTERCEPTOR_DETONATED — GameScene shows explosion + equation overlay
+    this.scene.events.emit(GameEvents.INTERCEPTOR_DETONATED, { x, y, solvedEquation });
+
     this.checkWaveComplete();
   }
 
@@ -443,12 +432,15 @@ export class WaveManager {
     const launcher = this.launchers[position];
     if (!launcher.isReloading) return; // Already reloaded by another path
 
+    // Refill pool from wave answers when exhausted so launchers never go empty
+    if (this.distributionPool.length === 0 && this.waveProblems.length > 0) {
+      const recycled = this.waveProblems.map(p => p.correctAnswer);
+      this.shuffleArray(recycled);
+      this.distributionPool.push(...recycled);
+    }
+
     if (this.distributionPool.length > 0) {
-      const nextAnswer = this.distributionPool.shift()!;
-      launcher.loadAnswer(nextAnswer);
-    } else {
-      // No more answers — show empty
-      launcher.loadAnswer('—');
+      launcher.loadAnswer(this.distributionPool.shift()!);
     }
   }
 
@@ -539,11 +531,6 @@ export class WaveManager {
       threatId,
       this.diffConfig.missileSpeedMultiplier,
     );
-
-    // Wire up tap handler
-    bomb.on('pointerdown', () => {
-      this.handleBombTap(bomb);
-    });
 
     this.activeBombs.set(threatId, bomb);
     this.totalSpawned += 1;
@@ -671,7 +658,30 @@ export class WaveManager {
 
   /** Event handler for 'bomb-reached-city'. */
   private onBombReachedCityEvent(payload: { threatId: string; cityIndex: number }): void {
+    // Capture bomb position before it's removed from the map
+    const bomb = this.activeBombs.get(payload.threatId);
+    const impactX = bomb?.x ?? 0;
+    const impactY = bomb?.y ?? GROUND_LINE_Y;
+
     this.onBombReachedBuilding(payload.threatId);
+
+    // Spawn ground impact explosion
+    const explosion = new Explosion(this.scene, impactX, impactY, '');
+    explosion.play();
+
+    // Apply damage to the targeted building cluster
+    const targetBuilding = this.buildings.find(
+      b => b.cityIndex === payload.cityIndex && !b.isDestroyed,
+    );
+    targetBuilding?.hit();
+
+    // Notify GameScene so the missiles-remaining counter decrements
+    this.scene.events.emit(GameEvents.THREAT_DESTROYED, {
+      threatId: payload.threatId,
+      threatType: 'standard-missile' as const,
+      points: 0,
+      chainReaction: false,
+    });
   }
 
   /** Resume wave (called on GAME_RESUMED). */
@@ -695,10 +705,11 @@ export class WaveManager {
       if (bomber.active) bomber.destroy();
     }
 
-    this.scene.events.off(GameEvents.INTERCEPTOR_DETONATED, this.onInterceptorDetonated, this);
+    this.scene.events.off(GameEvents.PROJECTILE_AT_TARGET, this.onProjectileAtTarget, this);
     this.scene.events.off('bomb-reached-city', this.onBombReachedCityEvent, this);
     this.scene.events.off(GameEvents.GAME_PAUSED, this.stopWave, this);
     this.scene.events.off(GameEvents.GAME_RESUMED, this.resumeWave, this);
+    this.scene.input.off('pointerdown', this.onPlayfieldClick, this);
   }
 }
 

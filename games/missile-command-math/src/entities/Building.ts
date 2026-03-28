@@ -144,6 +144,7 @@ export class Building extends Phaser.GameObjects.Container {
     // Create fresh intact sprite
     const spriteKey = this.getSpriteKeyForVariant();
     this.buildingSprite = this.scene.add.sprite(0, 0, spriteKey);
+    this.buildingSprite.setOrigin(0.5, 1);
     this.add(this.buildingSprite);
 
     const payload: CityRebuiltPayload = {
@@ -180,6 +181,7 @@ export class Building extends Phaser.GameObjects.Container {
   private buildVisual(): void {
     const spriteKey = this.getSpriteKeyForVariant();
     this.buildingSprite = this.scene.add.sprite(0, 0, spriteKey);
+    this.buildingSprite.setOrigin(0.5, 1); // bottom-center: container y = ground level
     this.add(this.buildingSprite);
   }
 
@@ -198,6 +200,7 @@ export class Building extends Phaser.GameObjects.Container {
       this.buildingSprite.destroy();
     }
     this.buildingSprite = this.scene.add.sprite(0, 0, SPRITE_KEYS.BUILDING_DESTROYED);
+    this.buildingSprite.setOrigin(0.5, 1);
     this.add(this.buildingSprite);
   }
 

@@ -23,6 +23,8 @@ export const GameEvents = {
   INTERCEPTOR_FIRED: 'interceptor-fired',
   /** Fired when an interceptor reaches its target and detonates. */
   INTERCEPTOR_DETONATED: 'interceptor-detonated',
+  /** Fired by Projectile when it arrives at its fixed world target (before blast check). */
+  PROJECTILE_AT_TARGET: 'projectile-at-target',
   /** Fired when an explosion animation completes (cleanup trigger). */
   EXPLOSION_COMPLETE: 'explosion-complete',
   /** Fired when a MIRV splits into child warheads at the split altitude. */

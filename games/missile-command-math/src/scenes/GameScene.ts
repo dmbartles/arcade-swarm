@@ -23,10 +23,6 @@ import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
   PLAYFIELD_X,
-  LAUNCHER_LEFT_X,
-  LAUNCHER_CENTER_X,
-  LAUNCHER_RIGHT_X,
-  LAUNCHER_Y,
   HUD_BAR_Y,
   PAUSE_BUTTON_X,
   PAUSE_BUTTON_Y,
@@ -44,8 +40,25 @@ import {
   COLOR_HUD_TEXT,
   COLOR_EXPLOSION_OUTER,
   COLOR_CITY_CELEBRATE,
+  LAUNCHER_LEFT_X,
+  LAUNCHER_CENTER_X,
+  LAUNCHER_RIGHT_X,
+  LAUNCHER_Y,
+  LEFT_CLUSTER_X,
+  RIGHT_CLUSTER_X,
+  LEFT_CLUSTER_Y,
+  GROUND_LINE_Y,
 } from '../config/gameConfig';
 import { LEVEL_CONFIGS } from '../config/difficultyConfig';
+import { DifficultyManager } from '../systems/DifficultyManager';
+import { MathEngine } from '../systems/MathEngine';
+import { ScoreManager } from '../systems/ScoreManager';
+import { WaveManager } from '../systems/WaveManager';
+import { Launcher } from '../entities/Launcher';
+import { Building } from '../entities/Building';
+import type { DifficultySetting } from '../types/IDifficultyConfig';
+import { SOUND_EVENTS } from '../config/audioConfig';
+import type { AudioManager } from '../systems/AudioManager';
 import { GameEvents } from '../types/GameEvents';
 import type {
   ThreatSpawnedPayload,
@@ -118,7 +131,18 @@ export class GameScene extends Phaser.Scene {
   // ── State ──
   private currentScore        = 0;
   private survivingBuildings  = 6;
+  private remainingThreats    = 0;
   private isPaused            = false;
+
+  // ── Systems ──
+  private difficultyManager!: DifficultyManager;
+  private mathEngine!:        MathEngine;
+  private scoreManager!:      ScoreManager;
+  private waveManager!:       WaveManager;
+
+  // ── Entities ──
+  private launchers!: { left: Launcher; center: Launcher; right: Launcher };
+  private buildingEntities: Building[] = [];
 
   constructor() {
     super({ key: 'GameScene' });
@@ -137,16 +161,20 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.buildingEntities = [];
     this.buildPlayfield();
+    this.buildGameSystems();
+    this.buildEntities();
     this.buildHUD();
     this.buildControlButtons();
     this.buildStreakBadge();
+    this.wireAudioManager();
     this.registerEventListeners();
+    this.startGameWave();
   }
 
-  update(_time: number, _delta: number): void {
-    // Intentionally lean — entity update loops are owned by WaveManager (Gameplay agent).
-    // GameScene.update() is reserved for any future scene-level per-frame work.
+  update(time: number, delta: number): void {
+    this.waveManager?.update(time, delta);
   }
 
   // ── Visual layer builders ─────────────────────────────────────────────────
@@ -165,20 +193,14 @@ export class GameScene extends Phaser.Scene {
       0xC8B8DC
     );
 
-    // Playfield interior (pale lavender inside CRT)
-    this.add.rectangle(
-      PLAYFIELD_X + 380,
-      PLAYFIELD_X + 240,
-      760,
-      480,
-      0xE8E0F0
-    );
+    // Playfield interior — fills the bezel interior (bezel inner edge at ~14px inset)
+    this.add.rectangle(400, 260, 772, 492, 0xE8E0F0);
 
-    // CRT bezel
-    this.add.image(20, 20, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
+    // Ground line — drawn before bezel so the bezel frame sits on top of it
+    this.add.image(20, GROUND_LINE_Y, SPRITE_KEYS.GROUND_LINE).setOrigin(0, 0);
 
-    // Ground line
-    this.add.image(20, 476, SPRITE_KEYS.GROUND_LINE).setOrigin(0, 0);
+    // CRT bezel — 800×520, must sit at (0,0) or it overflows the canvas
+    this.add.image(0, 0, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
 
     // HUD bar (bottom)
     this.add.image(0, HUD_BAR_Y, SPRITE_KEYS.HUD_BAR).setOrigin(0, 0);
@@ -257,6 +279,82 @@ export class GameScene extends Phaser.Scene {
     ]);
   }
 
+  /** Instantiate DifficultyManager, ScoreManager, and MathEngine. */
+  private buildGameSystems(): void {
+    const difficultySetting =
+      (this.registry.get('difficulty') as DifficultySetting) ?? 'normal';
+    this.difficultyManager = new DifficultyManager(
+      this.events,
+      difficultySetting,
+      this.level,
+    );
+    this.scoreManager = new ScoreManager(this);
+    this.mathEngine   = new MathEngine(this.events);
+  }
+
+  /** Place the three launchers and six buildings, then wire up WaveManager. */
+  private buildEntities(): void {
+    const cfg = this.difficultyManager.getCurrentConfig();
+
+    // Six buildings — added first so launchers draw on top of them
+    const buildingY = GROUND_LINE_Y;
+    const variants:  Array<'a' | 'b' | 'c'> = ['a', 'b', 'c'];
+    const cityNames  = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta'];
+    const leftXs     = [LEFT_CLUSTER_X + 40, LEFT_CLUSTER_X + 120, LEFT_CLUSTER_X + 200];
+    const rightXs    = [RIGHT_CLUSTER_X + 45, RIGHT_CLUSTER_X + 135, RIGHT_CLUSTER_X + 225];
+
+    for (let i = 0; i < 3; i++) {
+      this.buildingEntities.push(
+        new Building(this, leftXs[i],  buildingY, variants[i], 'left',  0, cityNames[i]),
+      );
+    }
+    for (let i = 0; i < 3; i++) {
+      this.buildingEntities.push(
+        new Building(this, rightXs[i], buildingY, variants[i], 'right', 1, cityNames[i + 3]),
+      );
+    }
+
+    // Three launchers — added after buildings so they render in front.
+    // y = GROUND_LINE_Y - 29: positions the bottom of the scaled sprite (0.65 × 45px) at ground.
+    const launcherY = GROUND_LINE_Y - 29;
+    this.launchers = {
+      left:   new Launcher(this, LAUNCHER_LEFT_X,   launcherY, 'left',   null, cfg.launcherReloadDelayMs),
+      center: new Launcher(this, LAUNCHER_CENTER_X, launcherY, 'center', null, cfg.launcherReloadDelayMs),
+      right:  new Launcher(this, LAUNCHER_RIGHT_X,  launcherY, 'right',  null, cfg.launcherReloadDelayMs),
+    };
+    this.survivingBuildings = this.buildingEntities.length;
+
+    this.waveManager = new WaveManager(
+      this, cfg, this.launchers, this.buildingEntities, this.scoreManager,
+    );
+  }
+
+  /**
+   * Update the AudioManager's scene reference to this scene and wire its event listeners.
+   * Also resumes the AudioContext (in case the user arrived here without clicking MenuScene).
+   */
+  private wireAudioManager(): void {
+    const am = this.game.registry.get('audioManager') as AudioManager | undefined;
+    if (!am) return;
+    am.setScene(this);
+    am.wireEventListeners();
+    am.resume().then(() => {
+      am.playMusic(am.selectGameplayMusic(this.level));
+    }).catch(() => { /* audio unavailable */ });
+  }
+
+  /** Generate the first wave of problems and start the spawn timer. */
+  private startGameWave(): void {
+    const cfg        = this.difficultyManager.getCurrentConfig();
+    const skillTypes = this.difficultyManager.getActiveSkillTypes();
+    const gradeLevel = this.difficultyManager.getGradeLevel();
+    const problems   = this.mathEngine.generateWaveProblems(
+      gradeLevel, skillTypes, cfg.problemsInWave,
+    );
+    this.waveManager.initWave(problems);
+    this.waveManager.startWave();
+  }
+
   // ── Event registration ────────────────────────────────────────────────────
 
   /**
@@ -298,14 +396,30 @@ export class GameScene extends Phaser.Scene {
     // Math engine events
     this.events.on(GameEvents.PROBLEM_GENERATED, this.onProblemGenerated, this);
 
+    // Training events
+    this.events.on(GameEvents.TRAINING_COMPLETE, this.onTrainingComplete, this);
+
+    // Difficulty changed → update gameplay music
+    this.events.on(GameEvents.DIFFICULTY_CHANGED, this.onDifficultyChanged, this);
+
+    // A/S/D keyboard shortcuts: select left / center / right launcher
+    const keyA = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A);
+    const keyS = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S);
+    const keyD = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D);
+    keyA.on('down', () => { if (!this.isPaused) this.waveManager?.selectLauncher('left'); });
+    keyS.on('down', () => { if (!this.isPaused) this.waveManager?.selectLauncher('center'); });
+    keyD.on('down', () => { if (!this.isPaused) this.waveManager?.selectLauncher('right'); });
+
     // Cleanup event listeners when scene shuts down
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.cleanup, this);
     this.events.once(Phaser.Scenes.Events.DESTROY,  this.cleanup, this);
   }
 
-  /** Remove all listeners to prevent memory leaks on scene restart. */
+  /** Remove all listeners and destroy systems to prevent memory leaks on scene restart. */
   private cleanup(): void {
     this.game.events.off(GameEvents.GAME_RESUMED, this.onGameResumed, this);
+    this.waveManager?.destroy();
+    this.difficultyManager?.destroy();
   }
 
   // ── Event handlers ────────────────────────────────────────────────────────
@@ -334,9 +448,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * THREAT_DESTROYED → spawn ScorePop at position, play explosion anim.
+   * THREAT_DESTROYED → decrement missiles remaining, spawn ScorePop if points > 0.
    */
   private onThreatDestroyed(payload: ThreatDestroyedPayload & { x?: number; y?: number }): void {
+    this.remainingThreats = Math.max(0, this.remainingThreats - 1);
+    this.updateMissilesRemaining(this.remainingThreats);
+
     if (payload.x !== undefined && payload.y !== undefined && payload.points > 0) {
       this.spawnScorePop(payload.points, payload.x, payload.y);
     }
@@ -384,9 +501,14 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * CITY_HIT → visual hit feedback (entity handles its own damage animation).
+   * In training mode (level 0), play TRAINING_MISS sound instead.
    */
   private onCityHit(_payload: CityHitPayload): void {
     // Building entity (Gameplay agent) plays BUILDING_HIT anim on itself.
+    if (this.isTraining) {
+      (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+        ?.playSFX(SOUND_EVENTS.TRAINING_MISS);
+    }
   }
 
   /**
@@ -433,10 +555,11 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** WAVE_STARTED → update level display. */
+  /** WAVE_STARTED → update level display and initialise missiles remaining. */
   private onWaveStarted(payload: { level: number; totalThreats: number }): void {
     this.updateLevelDisplay(payload.level);
-    this.updateMissilesRemaining(payload.totalThreats);
+    this.remainingThreats = payload.totalThreats;
+    this.updateMissilesRemaining(this.remainingThreats);
   }
 
   /**
@@ -472,6 +595,25 @@ export class GameScene extends Phaser.Scene {
   private onProblemGenerated(payload: { problems: unknown[] }): void {
     if (Array.isArray(payload?.problems)) {
       this.updateMissilesRemaining(payload.problems.length);
+    }
+  }
+
+  /**
+   * TRAINING_COMPLETE → first successful intercept in training wave.
+   */
+  private onTrainingComplete(): void {
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.TRAINING_SUCCESS);
+  }
+
+  /**
+   * DIFFICULTY_CHANGED → update gameplay music selection based on new level.
+   */
+  private onDifficultyChanged(config: { level: number }): void {
+    const am = this.game.registry.get('audioManager') as
+      { playMusic(s: string): void; selectGameplayMusic?(l: number): string } | undefined;
+    if (am && am.selectGameplayMusic) {
+      am.playMusic(am.selectGameplayMusic(config.level));
     }
   }
 

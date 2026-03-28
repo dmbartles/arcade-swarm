@@ -59,6 +59,10 @@ export const TRAIL_MAX_DOTS_PER_BOMB = 8;
 // ── Touch target minimum (WCAG 2.5.5) ────────────────────────────────────────
 export const MIN_TOUCH_TARGET_PX = 60;
 
+// ── Interceptor blast radius ──────────────────────────────────────────────────
+/** Any bomb whose center is within this distance of the detonation point is hit. */
+export const BLAST_RADIUS_PX = 60;
+
 // ── Explosion ─────────────────────────────────────────────────────────────────
 export const EXPLOSION_DURATION_MS      = 480;
 export const EXPLOSION_EQUATION_FADE_MS = 400;
