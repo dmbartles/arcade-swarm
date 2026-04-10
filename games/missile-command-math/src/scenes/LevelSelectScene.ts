@@ -16,14 +16,15 @@ import Phaser from 'phaser';
 import { SPRITE_KEYS } from '../assets';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../config/gameConfig';
 import { LEVEL_CONFIGS } from '../config/difficultyConfig';
+import { SOUND_EVENTS } from '../config/audioConfig';
 
 /** Grid layout constants. */
 const GRID_COLS     = 5;
 const GRID_ROWS     = 4;
 const CELL_W        = 120;
 const CELL_H        = 80;
-const GRID_START_X  = 100;
-const GRID_START_Y  = 110;
+const GRID_START_X  = 60;   // (800 - 5*120 - 4*20) / 2 = 60, centers the 680px grid
+const GRID_START_Y  = 100;
 const CELL_PAD_X    = 20;
 const CELL_PAD_Y    = 16;
 
@@ -89,8 +90,8 @@ export class LevelSelectScene extends Phaser.Scene {
   private buildBackground(): void {
     const cx = CANVAS_WIDTH / 2;
     this.add.rectangle(cx, CANVAS_HEIGHT / 2, CANVAS_WIDTH, CANVAS_HEIGHT, 0xC8B8DC);
-    this.add.rectangle(400, 280, 760, 480, 0xE8E0F0);
-    this.add.image(20, 20, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
+    this.add.rectangle(400, 260, 772, 492, 0xE8E0F0);
+    this.add.image(0, 0, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
     this.add.image(0, 600, SPRITE_KEYS.HUD_BAR).setOrigin(0, 0);
 
     this.add.text(cx, 60, 'SELECT LEVEL', TITLE_STYLE).setOrigin(0.5, 0.5);
@@ -163,6 +164,8 @@ export class LevelSelectScene extends Phaser.Scene {
 
   /** Route to the correct scene for the selected level. */
   private onLevelSelected(level: number): void {
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.MENU_BUTTON_CLICK);
     const levelCfg = LEVEL_CONFIGS[level];
     const needsBriefing = levelCfg?.specialRule?.toLowerCase().includes('new-op') ?? false;
 
@@ -174,18 +177,21 @@ export class LevelSelectScene extends Phaser.Scene {
   }
 
   private buildBackButton(): void {
-    const btn = this.add.rectangle(80, 570, 120, 40, 0xC8952A, 0.15)
+    const cx = CANVAS_WIDTH / 2;
+    const btn = this.add.rectangle(cx, 560, 200, 48, 0xC8952A, 0.15)
       .setInteractive({ useHandCursor: true })
-      .setStrokeStyle(1.5, 0xC8952A, 0.6);
+      .setStrokeStyle(2, 0xC8952A, 0.6);
 
-    this.add.text(80, 570, '← BACK', BUTTON_STYLE).setOrigin(0.5, 0.5);
+    this.add.text(cx, 560, '← BACK', BUTTON_STYLE).setOrigin(0.5, 0.5);
 
-    btn.on('pointerover', () => btn.setFillStyle(0xC8952A, 0.3));
+    btn.on('pointerover', () => btn.setFillStyle(0xC8952A, 0.30));
     btn.on('pointerout',  () => btn.setFillStyle(0xC8952A, 0.15));
     btn.on('pointerdown', () => this.onBack());
   }
 
   private onBack(): void {
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.MENU_BUTTON_CLICK);
     this.scene.start('MenuScene');
   }
 }

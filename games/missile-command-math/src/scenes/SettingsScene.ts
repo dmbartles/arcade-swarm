@@ -10,7 +10,7 @@
 import Phaser from 'phaser';
 import { SPRITE_KEYS } from '../assets';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../config/gameConfig';
-import { SOUND_ENABLED_KEY } from '../config/audioConfig';
+import { SOUND_ENABLED_KEY, SOUND_EVENTS } from '../config/audioConfig';
 import { GameEvents } from '../types/GameEvents';
 import type { DifficultySetting } from '../types/IDifficultyConfig';
 
@@ -77,8 +77,8 @@ export class SettingsScene extends Phaser.Scene {
 
     // Background
     this.add.rectangle(cx, CANVAS_HEIGHT / 2, CANVAS_WIDTH, CANVAS_HEIGHT, 0xC8B8DC);
-    this.add.rectangle(400, 280, 760, 480, 0xE8E0F0);
-    this.add.image(20, 20, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
+    this.add.rectangle(400, 260, 772, 492, 0xE8E0F0);
+    this.add.image(0, 0, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
     this.add.image(0, 600, SPRITE_KEYS.HUD_BAR).setOrigin(0, 0);
 
     // Title
@@ -158,19 +158,26 @@ export class SettingsScene extends Phaser.Scene {
   }
 
   private buildBackButton(cx: number): void {
-    const btn = this.add.rectangle(cx, 490, 200, 48, 0xC8952A, 0.15)
+    const btn = this.add.rectangle(cx, 560, 200, 48, 0xC8952A, 0.15)
       .setInteractive({ useHandCursor: true })
       .setStrokeStyle(2, 0xC8952A, 0.6);
 
-    this.add.text(cx, 490, '← BACK', BACK_STYLE).setOrigin(0.5, 0.5);
+    this.add.text(cx, 560, '← BACK', BACK_STYLE).setOrigin(0.5, 0.5);
 
     btn.on('pointerover', () => btn.setFillStyle(0xC8952A, 0.3));
     btn.on('pointerout',  () => btn.setFillStyle(0xC8952A, 0.15));
     btn.on('pointerdown', () => this.onBack());
   }
 
+  /** Play button click sound via AudioManager. */
+  private playButtonSound(): void {
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.MENU_BUTTON_CLICK);
+  }
+
   /** Toggle sound, persist to localStorage, update registry, emit event. */
   private onSoundToggle(): void {
+    this.playButtonSound();
     this.soundEnabled = !this.soundEnabled;
     localStorage.setItem(SOUND_ENABLED_KEY, String(this.soundEnabled));
     this.registry.set('soundEnabled', this.soundEnabled);
@@ -185,6 +192,7 @@ export class SettingsScene extends Phaser.Scene {
 
   /** Select a difficulty preset, persist, update registry, emit event. */
   private onDifficultySelect(setting: DifficultySetting): void {
+    this.playButtonSound();
     this.difficulty = setting;
     localStorage.setItem(DIFFICULTY_KEY, setting);
     this.registry.set('difficulty', setting);
@@ -201,6 +209,7 @@ export class SettingsScene extends Phaser.Scene {
   }
 
   private onBack(): void {
+    this.playButtonSound();
     this.scene.start('MenuScene');
   }
 }

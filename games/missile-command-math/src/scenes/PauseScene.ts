@@ -10,6 +10,7 @@
 import Phaser from 'phaser';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../config/gameConfig';
 import { GameEvents } from '../types/GameEvents';
+import { SOUND_EVENTS } from '../config/audioConfig';
 
 const TITLE_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontFamily: '"Courier New", Courier, monospace',
@@ -76,6 +77,8 @@ export class PauseScene extends Phaser.Scene {
    * Resume: emit GAME_RESUMED (GameScene listens) then stop this overlay.
    */
   private onResume(): void {
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.MENU_BUTTON_CLICK);
     // Emit on the global event emitter so GameScene receives it
     this.game.events.emit(GameEvents.GAME_RESUMED);
     this.scene.stop('PauseScene');
@@ -85,6 +88,8 @@ export class PauseScene extends Phaser.Scene {
    * Quit: stop both PauseScene and GameScene, then start MenuScene.
    */
   private onQuit(): void {
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.MENU_BUTTON_CLICK);
     this.scene.stop('PauseScene');
     this.scene.stop('GameScene');
     this.scene.start('MenuScene');

@@ -11,7 +11,7 @@ import Phaser from 'phaser';
 import { SPRITE_KEYS } from '../assets';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../config/gameConfig';
 import { LEVEL_CONFIGS } from '../config/difficultyConfig';
-import { GameEvents } from '../types/GameEvents';
+import { SOUND_EVENTS } from '../config/audioConfig';
 
 /** Y offset for the title text within the playfield. */
 const TITLE_Y = 160;
@@ -56,6 +56,11 @@ export class MenuScene extends Phaser.Scene {
   }
 
   create(): void {
+    // Resume AudioContext on first user gesture (browser policy requires user interaction)
+    this.input.once('pointerdown', () => {
+      (this.game.registry.get('audioManager') as { resume(): Promise<void> } | undefined)
+        ?.resume();
+    });
     this.buildUI();
   }
 
@@ -74,17 +79,11 @@ export class MenuScene extends Phaser.Scene {
       0xC8B8DC
     );
 
-    // Playfield interior
-    this.add.rectangle(400, 280, 760, 480, 0xE8E0F0);
+    // Playfield interior — fills the bezel interior (bezel inner edge at ~14px inset)
+    this.add.rectangle(400, 260, 772, 492, 0xE8E0F0);
 
-    // CRT frame bezel
-    this.add.image(20, 20, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
-
-    // Ground line
-    this.add.image(20, 476, SPRITE_KEYS.GROUND_LINE).setOrigin(0, 0);
-
-    // HUD bar background
-    this.add.image(0, 600, SPRITE_KEYS.HUD_BAR).setOrigin(0, 0);
+    // CRT frame bezel — 800×520, must sit at (0,0) or it overflows the canvas
+    this.add.image(0, 0, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
 
     // Game title
     this.add.text(cx, TITLE_Y, 'MISSILE\nCOMMAND MATH', TITLE_STYLE)
@@ -169,8 +168,9 @@ export class MenuScene extends Phaser.Scene {
     this.scene.start('SettingsScene');
   }
 
-  /** Emit sound event so AudioManager can play the click (no-op if not yet wired). */
+  /** Play button click sound via AudioManager. */
   private playButtonSound(): void {
-    this.events.emit(GameEvents.SOUND_TOGGLED);
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.MENU_BUTTON_CLICK);
   }
 }

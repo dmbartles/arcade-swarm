@@ -1,21 +1,15 @@
 import { defineConfig } from 'vitest/config';
-import { resolve } from 'path';
+import path from 'path';
 
 export default defineConfig({
+  test: {
+    environment: 'jsdom',
+    include: ['tests/unit/**/*.test.ts'],
+    globals: true,
+  },
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src'),
-    },
-  },
-  test: {
-    globals: true,
-    environment: 'jsdom',
-    include: ['src/**/*.{test,spec}.{ts,js}', 'tests/**/*.{test,spec}.{ts,js}'],
-    passWithNoTests: true,
-    coverage: {
-      reporter: ['text', 'lcov'],
-      include: ['src/**/*.ts'],
-      exclude: ['src/types/**', 'src/assets/**'],
+      '@arcade-swarm/math-engine': path.resolve(__dirname, '../../shared/math-engine/src/index.ts'),
     },
   },
 });

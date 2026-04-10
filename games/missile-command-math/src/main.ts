@@ -27,13 +27,13 @@ import { PauseScene }          from './scenes/PauseScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
-  width:  CANVAS_WIDTH,   // 800
-  height: CANVAS_HEIGHT,  // 640
   parent: 'game-container',
   backgroundColor: '#C8B8DC',
   scale: {
     mode:       Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH,
+    autoCenter: Phaser.Scale.NO_CENTER, // CSS transform handles centering
+    width:      CANVAS_WIDTH,   // 800 — must live here, not at top level, when using Scale Manager
+    height:     CANVAS_HEIGHT,  // 640
   },
   physics: {
     default: 'arcade',

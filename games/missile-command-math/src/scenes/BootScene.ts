@@ -11,6 +11,7 @@
 import Phaser from 'phaser';
 import { SpriteFactory, ANIM_KEYS, SPRITE_KEYS } from '../assets';
 import { SOUND_ENABLED_KEY } from '../config/audioConfig';
+import { AudioManager } from '../systems/AudioManager';
 
 /** localStorage key for the saved difficulty preset. */
 const DIFFICULTY_KEY = 'mcm_difficulty';
@@ -36,9 +37,11 @@ export class BootScene extends Phaser.Scene {
   }
 
   /**
-   * Create: register all Phaser animations, then start MenuScene.
+   * Create: instantiate AudioManager, register all Phaser animations, then start MenuScene.
    */
   create(): void {
+    const soundEnabled = (this.registry.get('soundEnabled') as boolean) ?? true;
+    this.game.registry.set('audioManager', new AudioManager(this, soundEnabled));
     this.registerAnimations();
     this.scene.start('MenuScene');
   }

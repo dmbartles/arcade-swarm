@@ -15,6 +15,7 @@ import { SPRITE_KEYS } from '../assets';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../config/gameConfig';
 import { LEVEL_CONFIGS } from '../config/difficultyConfig';
 import { GameEvents } from '../types/GameEvents';
+import { SOUND_EVENTS, MUSIC_TRACKS } from '../config/audioConfig';
 
 const HEADER_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontFamily: 'Georgia, "Times New Roman", serif',
@@ -80,8 +81,8 @@ export class BriefingScene extends Phaser.Scene {
 
     // Background
     this.add.rectangle(cx, CANVAS_HEIGHT / 2, CANVAS_WIDTH, CANVAS_HEIGHT, 0xC8B8DC);
-    this.add.rectangle(400, 280, 760, 480, 0xE8E0F0);
-    this.add.image(20, 20, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
+    this.add.rectangle(400, 260, 772, 492, 0xE8E0F0);
+    this.add.image(0, 0, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
     this.add.image(0, 600, SPRITE_KEYS.HUD_BAR).setOrigin(0, 0);
 
     // Card panel
@@ -135,6 +136,12 @@ export class BriefingScene extends Phaser.Scene {
     btnZone.on('pointerover', () => btnZone.setFillStyle(0xC8952A, 0.3));
     btnZone.on('pointerout',  () => btnZone.setFillStyle(0xC8952A, 0.15));
     btnZone.on('pointerdown', () => this.onDismiss());
+
+    // Play briefing enter sound and music
+    const _am = this.game.registry.get('audioManager') as
+      { playSFX(s: string): void; playMusic(s: string): void } | undefined;
+    _am?.playMusic(MUSIC_TRACKS.BRIEFING);
+    _am?.playSFX(SOUND_EVENTS.BRIEFING_ENTER);
   }
 
   /** Return a worked example appropriate for the given math types. */
@@ -181,6 +188,8 @@ export class BriefingScene extends Phaser.Scene {
 
   /** Emit INTERSTITIAL_DISMISSED and start GameScene for this level. */
   private onDismiss(): void {
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.BRIEFING_DISMISS);
     this.events.emit(GameEvents.INTERSTITIAL_DISMISSED);
     this.scene.start('GameScene', { level: this.level });
   }

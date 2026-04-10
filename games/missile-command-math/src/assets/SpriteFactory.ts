@@ -142,10 +142,8 @@ function roundRect(
 /**
  * Register a sprite sheet from an HTMLCanvasElement.
  *
- * Phaser's TextureManager.addSpriteSheet() accepts HTMLImageElement or Texture,
- * not HTMLCanvasElement directly. This helper registers the canvas as a
- * CanvasTexture first (which extends Texture), then uses that texture object
- * as the source for addSpriteSheet, and finally removes the intermediate entry.
+ * Phaser 3's TextureManager.addSpriteSheet() accepts HTMLCanvasElement directly —
+ * no intermediate CanvasTexture wrapper needed.
  */
 function addSheetFromCanvas(
   scene: Phaser.Scene,
@@ -154,11 +152,12 @@ function addSheetFromCanvas(
   frameWidth: number,
   frameHeight: number,
 ): void {
-  const tmpKey = `__tmp_sheet_${key}`;
-  const canvasTex = scene.textures.addCanvas(tmpKey, canvas);
-  if (!canvasTex) return;
-  scene.textures.addSpriteSheet(key, canvasTex, { frameWidth, frameHeight });
-  scene.textures.remove(tmpKey);
+  // Phaser 3 runtime accepts HTMLCanvasElement, but its TS types only declare
+  // HTMLImageElement | Texture. Cast to bypass the stale type declaration.
+  // Do NOT use the addCanvas→addSpriteSheet→remove pattern: remove() destroys
+  // the canvas data that the new SpriteSheet texture depends on.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  scene.textures.addSpriteSheet(key, canvas as any, { frameWidth, frameHeight });
 }
 
 /**
@@ -992,22 +991,22 @@ export class SpriteFactory {
     const canvas = makeCanvas(800, 520);
     const ctx = ctx2d(canvas);
 
-    // Outer bevel (darker)
+    // Outer bevel (darker) — path starts at 9px so 18px stroke stays within canvas
     ctx.strokeStyle = COLOR_CRT_BEVEL_DARK;
     ctx.lineWidth = 18;
-    roundRect(ctx, 2, 2, 796, 516, 42);
+    roundRect(ctx, 9, 9, 782, 502, 42);
     ctx.stroke();
 
     // Main bezel
     ctx.strokeStyle = COLOR_CRT_BEZEL;
     ctx.lineWidth = 14;
-    roundRect(ctx, 7, 7, 786, 506, 40);
+    roundRect(ctx, 21, 21, 758, 478, 40);
     ctx.stroke();
 
     // Inner bevel (lighter)
     ctx.strokeStyle = COLOR_CRT_BEVEL_LIGHT;
     ctx.lineWidth = 2;
-    roundRect(ctx, 14, 14, 772, 492, 38);
+    roundRect(ctx, 28, 28, 744, 464, 38);
     ctx.stroke();
 
     scene.textures.addCanvas(SPRITE_KEYS.CRT_FRAME, canvas);

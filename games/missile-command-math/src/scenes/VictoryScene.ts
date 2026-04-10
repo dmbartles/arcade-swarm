@@ -11,6 +11,7 @@ import Phaser from 'phaser';
 import { SPRITE_KEYS } from '../assets';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../config/gameConfig';
 import { GameEvents } from '../types/GameEvents';
+import { SOUND_EVENTS, MUSIC_TRACKS } from '../config/audioConfig';
 
 const TITLE_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontFamily: 'Georgia, "Times New Roman", serif',
@@ -58,12 +59,19 @@ export class VictoryScene extends Phaser.Scene {
     // Emit session victory for AudioManager etc.
     this.events.emit(GameEvents.SESSION_VICTORY);
 
+    // Play victory music and fanfare
+    const _am = this.game.registry.get('audioManager') as
+      { playSFX(s: string): void; playMusic(s: string): void; stopMusic(): void } | undefined;
+    _am?.stopMusic();
+    _am?.playMusic(MUSIC_TRACKS.VICTORY);
+    _am?.playSFX(SOUND_EVENTS.VICTORY_FANFARE);
+
     const cx = CANVAS_WIDTH / 2;
 
     // Background layers
     this.add.rectangle(cx, CANVAS_HEIGHT / 2, CANVAS_WIDTH, CANVAS_HEIGHT, 0xC8B8DC);
-    this.add.rectangle(400, 280, 760, 480, 0xE8E0F0);
-    this.add.image(20, 20, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
+    this.add.rectangle(400, 260, 772, 492, 0xE8E0F0);
+    this.add.image(0, 0, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
     this.add.image(0, 600, SPRITE_KEYS.HUD_BAR).setOrigin(0, 0);
 
     // Gold star banner
@@ -115,7 +123,11 @@ export class VictoryScene extends Phaser.Scene {
 
     bg.on('pointerover', () => bg.setFillStyle(0xC8952A, 0.3));
     bg.on('pointerout',  () => bg.setFillStyle(0xC8952A, 0.15));
-    bg.on('pointerdown', () => callback());
+    bg.on('pointerdown', () => {
+      (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+        ?.playSFX(SOUND_EVENTS.MENU_BUTTON_CLICK);
+      callback();
+    });
   }
 
   private onMenu(): void {

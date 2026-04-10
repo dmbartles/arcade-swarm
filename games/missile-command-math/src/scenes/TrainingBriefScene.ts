@@ -12,6 +12,7 @@ import Phaser from 'phaser';
 import { SPRITE_KEYS } from '../assets';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../config/gameConfig';
 import { GameEvents } from '../types/GameEvents';
+import { SOUND_EVENTS, MUSIC_TRACKS } from '../config/audioConfig';
 
 /** localStorage key to mark that training has been seen. */
 const HAS_SEEN_TRAINING_KEY = 'mcm_has_seen_training';
@@ -70,10 +71,10 @@ export class TrainingBriefScene extends Phaser.Scene {
     this.add.rectangle(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, CANVAS_WIDTH, CANVAS_HEIGHT, 0xC8B8DC);
 
     // Playfield interior
-    this.add.rectangle(400, 280, 760, 480, 0xE8E0F0);
+    this.add.rectangle(400, 260, 772, 492, 0xE8E0F0);
 
     // CRT frame
-    this.add.image(20, 20, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
+    this.add.image(0, 0, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
 
     // HUD bar
     this.add.image(0, 600, SPRITE_KEYS.HUD_BAR).setOrigin(0, 0);
@@ -119,10 +120,19 @@ export class TrainingBriefScene extends Phaser.Scene {
     btnZone.on('pointerover', () => btnZone.setFillStyle(0xC8952A, 0.3));
     btnZone.on('pointerout',  () => btnZone.setFillStyle(0xC8952A, 0.15));
     btnZone.on('pointerdown', () => this.onDismiss());
+
+    // Play briefing enter sound and music
+    const _am = this.game.registry.get('audioManager') as
+      { playSFX(s: string): void; playMusic(s: string): void } | undefined;
+    _am?.playMusic(MUSIC_TRACKS.BRIEFING);
+    _am?.playSFX(SOUND_EVENTS.BRIEFING_ENTER);
   }
 
   /** On dismiss: mark training seen, emit event, start training GameScene. */
   private onDismiss(): void {
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.BRIEFING_DISMISS);
+
     localStorage.setItem(HAS_SEEN_TRAINING_KEY, 'true');
     this.registry.set('hasSeenTraining', true);
 

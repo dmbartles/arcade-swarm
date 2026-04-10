@@ -15,6 +15,7 @@ import {
   LAUNCHER_NOZZLE_TWEEN_MS,
   MIN_TOUCH_TARGET_PX,
 } from '../config/gameConfig';
+import { SOUND_EVENTS } from '../config/audioConfig';
 
 /** Sprite key per launcher placement. */
 const LAUNCHER_SPRITE_MAP: Record<'left' | 'center' | 'right', SpriteKey> = {
@@ -48,6 +49,9 @@ export class Launcher extends Phaser.GameObjects.Container {
   /** The badge answer text. */
   private badgeText: Phaser.GameObjects.Text | null = null;
 
+  /** Yellow selection ring shown when this launcher is active. */
+  private selectionRing: Phaser.GameObjects.Rectangle | null = null;
+
   /**
    * @param scene          - Parent scene.
    * @param x              - Center-x position.
@@ -73,9 +77,12 @@ export class Launcher extends Phaser.GameObjects.Container {
 
     this.buildVisual();
 
+    // Scale the whole container down; nozzleWorldY accounts for this
+    this.setScale(0.65);
+
     scene.add.existing(this);
 
-    // Make the whole launcher interactive for touch
+    // Make the whole launcher interactive for touch (in unscaled local space)
     this.setInteractive(
       new Phaser.Geom.Rectangle(
         -MIN_TOUCH_TARGET_PX / 2,
@@ -95,6 +102,10 @@ export class Launcher extends Phaser.GameObjects.Container {
     this.loadedAnswer = answer;
     this.isReloading = false;
     this.updateBadge();
+
+    const _audioManager = this.scene.game.registry.get('audioManager') as
+      { playSFX(id: string): void } | undefined;
+    _audioManager?.playSFX(SOUND_EVENTS.LAUNCHER_RELOAD);
 
     this.scene.events.emit(GameEvents.QUEUE_ADVANCED, { position: this.launcherPosition });
   }
@@ -143,6 +154,21 @@ export class Launcher extends Phaser.GameObjects.Container {
   }
 
   /**
+   * Show or hide the selection ring indicating this launcher is active.
+   */
+  setSelected(selected: boolean): void {
+    if (selected && !this.selectionRing) {
+      this.selectionRing = this.scene.add.rectangle(0, 0, 74, 84)
+        .setStrokeStyle(3, 0xFFFF00, 1)
+        .setFillStyle(0x000000, 0);
+      this.add(this.selectionRing);
+    } else if (!selected && this.selectionRing) {
+      this.remove(this.selectionRing, true);
+      this.selectionRing = null;
+    }
+  }
+
+  /**
    * Update the reload delay (called when difficulty changes).
    */
   setReloadDelay(ms: number): void {
@@ -154,6 +180,14 @@ export class Launcher extends Phaser.GameObjects.Container {
    */
   getReloadDelay(): number {
     return this.reloadDelayMs;
+  }
+
+  /**
+   * World-space y of the launcher nozzle top, accounting for container scale.
+   * The sprite is 90px tall; the nozzle is at the top half, offset 45px from center.
+   */
+  get nozzleWorldY(): number {
+    return this.y - 45 * this.scaleY;
   }
 
   // ── Private Methods ──────────────────────────────────────────────────────

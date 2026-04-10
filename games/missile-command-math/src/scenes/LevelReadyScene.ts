@@ -12,6 +12,7 @@ import { SPRITE_KEYS } from '../assets';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../config/gameConfig';
 import { LEVEL_CONFIGS } from '../config/difficultyConfig';
 import { GameEvents } from '../types/GameEvents';
+import { SOUND_EVENTS } from '../config/audioConfig';
 
 const LEVEL_READY_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontFamily: '"Courier New", Courier, monospace',
@@ -59,8 +60,8 @@ export class LevelReadyScene extends Phaser.Scene {
 
     // Background
     this.add.rectangle(cx, CANVAS_HEIGHT / 2, CANVAS_WIDTH, CANVAS_HEIGHT, 0xC8B8DC);
-    this.add.rectangle(400, 280, 760, 480, 0xE8E0F0);
-    this.add.image(20, 20, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
+    this.add.rectangle(400, 260, 772, 492, 0xE8E0F0);
+    this.add.image(0, 0, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
     this.add.image(0, 600, SPRITE_KEYS.HUD_BAR).setOrigin(0, 0);
 
     // Level ready text
@@ -98,10 +99,16 @@ export class LevelReadyScene extends Phaser.Scene {
 
     // Also allow tap anywhere on the playfield to dismiss
     this.input.on('pointerdown', () => this.onReady());
+
+    // Play level ready beep
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.LEVEL_READY_BEEP);
   }
 
   /** Emit INTERSTITIAL_DISMISSED and launch GameScene. */
   private onReady(): void {
+    (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+      ?.playSFX(SOUND_EVENTS.MENU_BUTTON_CLICK);
     this.events.emit(GameEvents.INTERSTITIAL_DISMISSED);
     this.scene.start('GameScene', { level: this.level });
   }

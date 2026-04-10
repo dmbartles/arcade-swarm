@@ -10,6 +10,7 @@ import Phaser from 'phaser';
 import { SPRITE_KEYS } from '../assets';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../config/gameConfig';
 import type { GameOverPayload } from '../types/GameEvents';
+import { SOUND_EVENTS } from '../config/audioConfig';
 
 const TITLE_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontFamily: 'Georgia, "Times New Roman", serif',
@@ -57,8 +58,8 @@ export class GameOverScene extends Phaser.Scene {
 
     // Background layers
     this.add.rectangle(cx, CANVAS_HEIGHT / 2, CANVAS_WIDTH, CANVAS_HEIGHT, 0xC8B8DC);
-    this.add.rectangle(400, 280, 760, 480, 0xE8E0F0);
-    this.add.image(20, 20, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
+    this.add.rectangle(400, 260, 772, 492, 0xE8E0F0);
+    this.add.image(0, 0, SPRITE_KEYS.CRT_FRAME).setOrigin(0, 0);
     this.add.image(0, 600, SPRITE_KEYS.HUD_BAR).setOrigin(0, 0);
 
     // Title
@@ -93,7 +94,11 @@ export class GameOverScene extends Phaser.Scene {
 
     bg.on('pointerover', () => bg.setFillStyle(0xC8952A, 0.3));
     bg.on('pointerout',  () => bg.setFillStyle(0xC8952A, 0.15));
-    bg.on('pointerdown', () => callback());
+    bg.on('pointerdown', () => {
+      (this.game.registry.get('audioManager') as { playSFX(s: string): void } | undefined)
+        ?.playSFX(SOUND_EVENTS.MENU_BUTTON_CLICK);
+      callback();
+    });
   }
 
   /** Retry the same level. */

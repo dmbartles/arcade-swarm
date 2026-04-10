@@ -272,6 +272,13 @@ export class AudioManager {
   }
 
   /**
+   * Update the scene reference (call before wireEventListeners when scene changes).
+   */
+  setScene(scene: Phaser.Scene): void {
+    this.scene = scene;
+  }
+
+  /**
    * Set the sound enabled state.
    */
   setEnabled(enabled: boolean): void {
@@ -285,7 +292,7 @@ export class AudioManager {
     }
 
     try {
-      localStorage.setItem(SOUND_ENABLED_KEY, enabled ? '1' : '0');
+      localStorage.setItem(SOUND_ENABLED_KEY, enabled ? 'true' : 'false');
     } catch {
       // localStorage not available
     }
@@ -374,7 +381,11 @@ export class AudioManager {
 
     bus.on(GameEvents.THREAT_DESTROYED, (payload: ThreatDestroyedPayload) => {
       if (payload.threatType === 'bomber') {
-        this.playSFX(SOUND_EVENTS.BOMBER_INTERCEPT);
+        if (payload.points > 0) {
+          this.playSFX(SOUND_EVENTS.BOMBER_INTERCEPT);
+        } else {
+          this.playSFX(SOUND_EVENTS.BOMBER_ESCAPED);
+        }
       }
     });
 
@@ -655,6 +666,126 @@ export class AudioManager {
           frequency: noteToHz('C5'),
           duration: 0.15,
           attack: 0.01, decay: 0.05, sustain: 0.2, release: 0.1,
+          volume: 0.5,
+        },
+      },
+      {
+        id: SOUND_EVENTS.LAUNCHER_RELOAD,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('C3'),
+          duration: 0.08,
+          attack: 0.005, decay: 0.04, sustain: 0.1, release: 0.05,
+          volume: 0.45,
+        },
+      },
+      {
+        id: SOUND_EVENTS.BOMBER_ESCAPED,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('G3'),
+          duration: 0.5,
+          attack: 0.02, decay: 0.2, sustain: 0.2, release: 0.3,
+          volume: 0.65,
+        },
+      },
+      {
+        id: SOUND_EVENTS.STAR_REVEAL,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('E5'),
+          duration: 0.2,
+          attack: 0.01, decay: 0.08, sustain: 0.3, release: 0.15,
+          volume: 0.7,
+        },
+      },
+      {
+        id: SOUND_EVENTS.FIREWORK_POP,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('D5'),
+          duration: 0.18,
+          attack: 0.005, decay: 0.08, sustain: 0.1, release: 0.12,
+          volume: 0.5,
+        },
+      },
+      {
+        id: SOUND_EVENTS.LEVEL_READY_BEEP,
+        config: {
+          type: 'square',
+          frequency: noteToHz('C5'),
+          duration: 0.2,
+          attack: 0.01, decay: 0.05, sustain: 0.3, release: 0.1,
+          volume: 0.6,
+        },
+      },
+      {
+        id: SOUND_EVENTS.BRIEFING_ENTER,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('E3'),
+          duration: 0.12,
+          attack: 0.01, decay: 0.06, sustain: 0.1, release: 0.08,
+          volume: 0.5,
+        },
+      },
+      {
+        id: SOUND_EVENTS.BRIEFING_DISMISS,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('C4'),
+          duration: 0.2,
+          attack: 0.01, decay: 0.08, sustain: 0.2, release: 0.15,
+          volume: 0.55,
+        },
+      },
+      {
+        id: SOUND_EVENTS.TRAINING_SUCCESS,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('C5'),
+          duration: 0.9,
+          attack: 0.02, decay: 0.2, sustain: 0.5, release: 0.4,
+          volume: 0.85,
+        },
+      },
+      {
+        id: SOUND_EVENTS.TRAINING_MISS,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('F3'),
+          duration: 0.3,
+          attack: 0.02, decay: 0.15, sustain: 0.1, release: 0.2,
+          volume: 0.5,
+        },
+      },
+      {
+        id: SOUND_EVENTS.CITY_REBUILD_TICK,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('G3'),
+          duration: 0.08,
+          attack: 0.005, decay: 0.04, sustain: 0.1, release: 0.05,
+          volume: 0.35,
+        },
+      },
+      {
+        id: SOUND_EVENTS.VICTORY_FANFARE,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('C5'),
+          duration: 1.5,
+          attack: 0.02, decay: 0.3, sustain: 0.5, release: 0.8,
+          volume: 0.9,
+        },
+      },
+      {
+        id: SOUND_EVENTS.MENU_BUTTON_CLICK,
+        config: {
+          type: 'sine',
+          frequency: noteToHz('C4'),
+          duration: 0.06,
+          attack: 0.005, decay: 0.03, sustain: 0.1, release: 0.04,
           volume: 0.5,
         },
       },
